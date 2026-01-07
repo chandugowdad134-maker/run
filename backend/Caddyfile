@@ -1,0 +1,27 @@
+# Caddy reverse proxy config for local HTTPS development
+# 
+# Setup:
+# 1. Install Caddy: brew install caddy (macOS)
+# 2. Install mkcert: brew install mkcert
+# 3. Create local CA: mkcert -install
+# 4. Generate cert: mkcert 192.168.0.117
+# 5. Run: caddy run --config backend/Caddyfile
+#
+# The cert files will be named: 192.168.0.117.pem and 192.168.0.117-key.pem
+
+https://192.168.0.117:4443 {
+	tls /Users/chandu/Project/github/territory-runner-main/backend/192.168.0.117.pem /Users/chandu/Project/github/territory-runner-main/backend/192.168.0.117-key.pem
+	reverse_proxy localhost:4000
+	
+	# CORS headers for development
+	header {
+		Access-Control-Allow-Origin *
+		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		Access-Control-Allow-Headers "Authorization, Content-Type"
+	}
+}
+
+# Production example (with automatic Let's Encrypt):
+# your-domain.com {
+#   reverse_proxy localhost:4000
+# }

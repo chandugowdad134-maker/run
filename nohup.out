@@ -1,0 +1,19 @@
+{"level":"info","ts":1767786480.790195,"msg":"maxprocs: Leaving GOMAXPROCS=8: CPU quota undefined"}
+{"level":"info","ts":1767786480.790271,"msg":"GOMEMLIMIT is updated","package":"github.com/KimMachineGun/automemlimit/memlimit","GOMEMLIMIT":7730941132,"previous":9223372036854775807}
+{"level":"info","ts":1767786480.7905989,"msg":"using config from file","file":"/Users/chandu/Project/github/territory-runner-main/backend/Caddyfile"}
+{"level":"info","ts":1767786480.791135,"msg":"adapted config to JSON","adapter":"caddyfile"}
+{"level":"warn","ts":1767786480.791147,"msg":"Caddyfile input is not formatted; run 'caddy fmt --overwrite' to fix inconsistencies","adapter":"caddyfile","file":"/Users/chandu/Project/github/territory-runner-main/backend/Caddyfile","line":15}
+{"level":"info","ts":1767786480.7942028,"logger":"admin","msg":"admin endpoint started","address":"localhost:2019","enforce_origin":false,"origins":["//localhost:2019","//[::1]:2019","//127.0.0.1:2019"]}
+{"level":"info","ts":1767786480.794316,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x14000612a00"}
+{"level":"info","ts":1767786480.794755,"logger":"http.auto_https","msg":"skipping automatic certificate management because one or more matching certificates are already loaded","domain":"192.168.0.117","server_name":"srv0"}
+{"level":"info","ts":1767786480.794762,"logger":"http.auto_https","msg":"enabling automatic HTTP->HTTPS redirects","server_name":"srv0"}
+{"level":"info","ts":1767786480.7949598,"logger":"http","msg":"enabling HTTP/3 listener","addr":":4443"}
+{"level":"info","ts":1767786480.795053,"logger":"http.log","msg":"server running","name":"srv0","protocols":["h1","h2","h3"]}
+{"level":"warn","ts":1767786480.7950919,"logger":"http","msg":"HTTP/2 skipped because it requires TLS","network":"tcp","addr":":80"}
+{"level":"warn","ts":1767786480.7950962,"logger":"http","msg":"HTTP/3 skipped because it requires TLS","network":"tcp","addr":":80"}
+{"level":"info","ts":1767786480.7950988,"logger":"http.log","msg":"server running","name":"remaining_auto_https_redirects","protocols":["h1","h2","h3"]}
+{"level":"info","ts":1767786480.795213,"msg":"autosaved config (load with --resume flag)","file":"/Users/chandu/Library/Application Support/Caddy/autosave.json"}
+{"level":"info","ts":1767786480.795219,"msg":"serving initial configuration"}
+{"level":"info","ts":1767786480.7989151,"logger":"tls","msg":"storage cleaning happened too recently; skipping for now","storage":"FileStorage:/Users/chandu/Library/Application Support/Caddy","instance":"82c76eed-5be6-486f-a7fc-4e9efac53cb8","try_again":1767872880.7989151,"try_again_in":86399.99999975}
+{"level":"info","ts":1767786480.799003,"logger":"tls","msg":"finished cleaning storage units"}
+{"level":"info","ts":1767794060.5452008,"msg":"not implemented","signal":"SIGHUP"}

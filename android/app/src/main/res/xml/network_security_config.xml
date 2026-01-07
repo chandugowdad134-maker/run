@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext traffic for local development to specific host -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.0.117</domain>
+    </domain-config>
+    <!-- You can widen this during dev; tighten for production -->
+    <!--
+    <base-config cleartextTrafficPermitted="true" />
+    -->
+</network-security-config>
