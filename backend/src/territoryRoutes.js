@@ -2,6 +2,7 @@ import express from 'express';
 import { pool } from './db.js';
 import { requireAuth } from './middleware/auth.js';
 import { getRedisClient, isRedisAvailable } from './server.js';
+import { tileIdFromCoord } from './grid.js';
 
 const router = express.Router();
 
@@ -195,27 +196,31 @@ router.post('/context', requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Latitude and longitude required' });
     }
 
-    // Find territories within 100m radius of current position
-    const territoriesQuery = `
-      SELECT 
+    // Approximate nearby territories (± ~100-150m) using geohash tiles (no PostGIS dependency)
+    const offsets = [-0.001, 0, 0.001];
+    const candidateTiles = new Set();
+    for (const dLat of offsets) {
+      for (const dLng of offsets) {
+        candidateTiles.add(tileIdFromCoord(lat + dLat, lng + dLng));
+      }
+    }
+
+    const candidateArray = Array.from(candidateTiles);
+    const territories = await pool.query(
+      `SELECT 
         t.tile_id,
         t.owner_id,
         t.last_claimed,
-        t.claim_count,
-        t.geometry,
+        t.strength,
+        t.geojson,
         u.username as owner_name
       FROM territories t
       LEFT JOIN users u ON t.owner_id = u.id
-      WHERE ST_DWithin(
-        ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-        ST_SetSRID(ST_GeomFromGeoJSON(t.geometry), 4326)::geography,
-        100
-      )
+      WHERE t.tile_id = ANY($1)
       ORDER BY t.last_claimed DESC
-      LIMIT 5
-    `;
-
-    const territories = await pool.query(territoriesQuery, [lng, lat]);
+      LIMIT 9`,
+      [candidateArray]
+    );
 
     // Get user's previous runs in this area (within 50m)
     const userRunsQuery = `
@@ -224,22 +229,14 @@ router.post('/context', requireAuth, async (req, res) => {
         r.distance_km,
         r.duration_sec,
         r.created_at,
-        r.points
+        r.raw_points
       FROM runs r
       WHERE r.user_id = $1
-        AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements(r.points) AS p
-          WHERE ST_DWithin(
-            ST_SetSRID(ST_MakePoint((p->>'lng')::float, (p->>'lat')::float), 4326)::geography,
-            ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-            50
-          )
-        )
       ORDER BY r.created_at DESC
-      LIMIT 10
+      LIMIT 50
     `;
 
-    const userRuns = await pool.query(userRunsQuery, [userId, lng, lat]);
+    const userRuns = await pool.query(userRunsQuery, [userId]);
 
     // Get fastest time for this user in this area
     let personalBest = null;
@@ -263,14 +260,14 @@ router.post('/context', requireAuth, async (req, res) => {
     const historyQuery = `
       SELECT 
         th.tile_id,
-        th.old_owner_id,
-        th.new_owner_id,
+        th.from_owner,
+        th.to_owner,
         th.changed_at,
-        u1.username as old_owner_name,
-        u2.username as new_owner_name
+        u1.username as from_owner_name,
+        u2.username as to_owner_name
       FROM territory_history th
-      LEFT JOIN users u1 ON th.old_owner_id = u1.id
-      LEFT JOIN users u2 ON th.new_owner_id = u2.id
+      LEFT JOIN users u1 ON th.from_owner = u1.id
+      LEFT JOIN users u2 ON th.to_owner = u2.id
       WHERE th.tile_id = ANY($1)
       ORDER BY th.changed_at DESC
       LIMIT 20

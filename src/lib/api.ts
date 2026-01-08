@@ -2,7 +2,8 @@ import { Capacitor } from '@capacitor/core';
 import { db } from './db';
 
 // Use environment variable for API URL, but allow mobile build override
-const MOBILE_DEV_IP = 'http://192.168.0.117:4000';
+// Default mobile dev endpoint: HTTPS via Caddy reverse proxy
+const MOBILE_DEV_IP = 'https://192.168.0.117:4443';
 const rawApiUrl = import.meta.env.VITE_API_URL;
 const mobileApiUrl = import.meta.env.VITE_MOBILE_API_URL;
 const isMobileBuildFlag = import.meta.env.VITE_MOBILE_BUILD === true || import.meta.env.VITE_MOBILE_BUILD === 'true';
@@ -24,6 +25,14 @@ if (isMobileRuntime) {
 } else {
   API_URL = rawApiUrl || 'http://localhost:4000';
 }
+
+// Warn if HTTPS origin with HTTP API (mixed content)
+try {
+  const isHttpsOrigin = typeof window !== 'undefined' && window.location?.protocol === 'https:';
+  if (isHttpsOrigin && API_URL.startsWith('http://')) {
+    console.warn('[TerritoryRun] Mixed content: API_URL is HTTP while app is served over HTTPS. Set VITE_API_URL to an HTTPS endpoint (e.g., via Caddy on 4443).');
+  }
+} catch {}
 
 function getToken() {
   return localStorage.getItem('auth_token');

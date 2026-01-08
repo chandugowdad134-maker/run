@@ -17,7 +17,8 @@ const config: CapacitorConfig = {
     }
   },
   server: {
-    androidScheme: 'http'
+    androidScheme: 'https',
+    iosScheme: 'https'
   },
   ios: {
     scheme: 'TerritoryRun'
