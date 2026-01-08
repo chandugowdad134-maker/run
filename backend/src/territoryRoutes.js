@@ -1,20 +1,110 @@
 import express from 'express';
 import { pool } from './db.js';
 import { requireAuth } from './middleware/auth.js';
+import { redisClient } from './server.js';
 
 const router = express.Router();
+
+// Helper function to safely use Redis
+const redisGet = async (key) => {
+  try {
+    if (redisClient && redisClient.isOpen) {
+      return await redisClient.get(key);
+    }
+  } catch (err) {
+    console.warn('Redis get failed:', err.message);
+  }
+  return null;
+};
+
+const redisSetEx = async (key, ttl, value) => {
+  try {
+    if (redisClient && redisClient.isOpen) {
+      await redisClient.setEx(key, ttl, value);
+    }
+  } catch (err) {
+    console.warn('Redis set failed:', err.message);
+  }
+};
 
 router.get('/', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || '500', 10), 2000);
     const ownerId = req.query.ownerId ? parseInt(req.query.ownerId, 10) : null;
+    const cacheKey = `territories:${ownerId || 'all'}:${limit}`;
+
+    // Try cache first
+    const cached = await redisGet(cacheKey);
+    if (cached) {
+      return res.json({ ok: true, territories: JSON.parse(cached), cached: true });
+    }
+
     const rows = ownerId
       ? (await pool.query('SELECT * FROM territories WHERE owner_id = $1 ORDER BY last_claimed DESC LIMIT $2', [ownerId, limit])).rows
       : (await pool.query('SELECT * FROM territories ORDER BY last_claimed DESC LIMIT $1', [limit])).rows;
+
+    // Cache for 5 minutes
+    await redisSetEx(cacheKey, 300, JSON.stringify(rows));
+
     return res.json({ ok: true, territories: rows });
   } catch (err) {
     console.error('Territory fetch failed:', err);
     return res.status(500).json({ ok: false, error: 'Failed to fetch territories' });
+  }
+});
+
+// Territories the user has ever owned/claimed (includes tiles that were later lost)
+router.get('/mine-history', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '500', 10), 2000);
+    const userId = req.userId;
+    const activityType = req.query.activityType; // 'cycle', 'run', or undefined for all
+    const fields = req.query.fields; // 'lite' for minimal payload
+    const cursor = req.query.cursor; // ISO timestamp for pagination
+
+    // Field selection
+    const selectFields = fields === 'lite' 
+      ? 't.tile_id, t.owner_id, t.activity_type, t.last_claimed'
+      : 't.*';
+
+    const query = `
+      WITH tiles AS (
+        SELECT tile_id FROM territories WHERE owner_id = $1
+        UNION
+        SELECT tile_id FROM territory_history WHERE to_owner = $1
+        UNION
+        SELECT tile_id FROM territory_claims WHERE user_id = $1
+          ${activityType ? 'AND activity_type = $3' : ''}
+      )
+      SELECT ${selectFields}
+      FROM territories t
+      JOIN tiles ON tiles.tile_id = t.tile_id
+      ${cursor ? `WHERE t.last_claimed < $${activityType ? '4' : '3'}` : ''}
+      ORDER BY t.last_claimed DESC
+      LIMIT $2
+    `;
+
+    const params = [];
+    params.push(userId, limit);
+    if (activityType) params.push(activityType);
+    if (cursor) params.push(cursor);
+
+    const { rows } = await pool.query(query, params);
+    
+    // Generate next cursor for pagination
+    const nextCursor = rows.length === limit && rows.length > 0
+      ? rows[rows.length - 1].last_claimed
+      : null;
+
+    return res.json({ 
+      ok: true, 
+      territories: rows,
+      nextCursor,
+      hasMore: rows.length === limit
+    });
+  } catch (err) {
+    console.error('Mine-history fetch failed:', err);
+    return res.status(500).json({ ok: false, error: 'Failed to fetch mine history territories' });
   }
 });
 

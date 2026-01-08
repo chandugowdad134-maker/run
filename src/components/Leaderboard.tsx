@@ -1,10 +1,48 @@
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Crown, TrendingUp, MapPin, Zap } from "lucide-react";
+import { api, getApiErrorMessage } from "@/lib/api";
 
 const Leaderboard = () => {
-  // TODO: Fetch real leaderboard data from API
-  const leaderboardData = [];
-  const isLoading = false;
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const res = await api.get('/leaderboard/global?limit=10');
+        if (cancelled) return;
+        setLeaderboard(res.leaderboard || []);
+      } catch (err) {
+        if (cancelled) return;
+        setError(getApiErrorMessage(err, 'Failed to load leaderboard'));
+        setLeaderboard([]);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const leaderboardData = useMemo(() => {
+    return (leaderboard || []).map((u: any) => ({
+      id: u.id,
+      rank: u.rank,
+      name: u.username,
+      territories: u.territories_owned,
+      km: typeof u.total_distance_km === 'number' ? u.total_distance_km.toFixed(1) : '0.0',
+      streak: typeof u.total_runs === 'number' ? `${u.total_runs}` : '-',
+      change: null as null | 'up',
+    }));
+  }, [leaderboard]);
 
   if (isLoading) {
     return (
@@ -25,7 +63,7 @@ const Leaderboard = () => {
     );
   }
 
-  if (leaderboardData.length === 0) {
+  if (!isLoading && leaderboardData.length === 0) {
     return (
       <div className="bg-gradient-card rounded-2xl border-glow p-6">
         <div className="flex items-center justify-between mb-6">
@@ -40,7 +78,7 @@ const Leaderboard = () => {
         <div className="flex items-center justify-center py-8">
           <div className="text-center text-muted-foreground">
             <Crown className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p className="text-sm">No leaderboard data available</p>
+            <p className="text-sm">{error || 'No leaderboard data available'}</p>
             <p className="text-xs mt-1">Start running to claim your territory!</p>
           </div>
         </div>
@@ -63,7 +101,7 @@ const Leaderboard = () => {
       <div className="space-y-3">
         {leaderboardData.map((player, index) => (
           <motion.div
-            key={player.name}
+            key={player.id ?? player.name}
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: index * 0.1 }}

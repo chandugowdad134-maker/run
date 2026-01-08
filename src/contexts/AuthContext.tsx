@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { apiFetch, setToken } from '@/lib/api';
+import { db } from '@/lib/db';
 
 export interface UserProfile {
   id: number;
@@ -42,11 +43,46 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setIsLoading(false);
       return;
     }
+    setToken(token); // Set token for API calls
+
+    // Try to load cached user profile first
+    try {
+      const cachedProfile = await db.userProfile.get(token); // Use token as key? Wait, userId as key.
+      // Actually, since userId is in token, but to simplify, store with userId.
+      // For now, assume we store with a fixed key, but better to use userId.
+      // Since we don't have userId yet, load all and take first.
+      const cachedProfiles = await db.userProfile.toArray();
+      if (cachedProfiles.length > 0) {
+        setUser(cachedProfiles[0]); // Assume single user
+      }
+    } catch (err) {
+      console.log('Error loading cached profile:', err);
+    }
+
+    // Try to fetch fresh data
     try {
       const me = await fetchMe();
       setUser(me);
-    } catch (err) {
-      setToken(null);
+      // Cache the profile
+      await db.userProfile.put({
+        id: me.id.toString(),
+        username: me.username,
+        email: me.email,
+        stats: me.stats,
+        lastSynced: Date.now()
+      });
+    } catch (err: any) {
+      // If network error and no cached data, keep cached or set to null
+      if (err.message?.includes('401') || err.message?.includes('Unauthorized') || err.message?.includes('invalid token')) {
+        console.log('Token expired or invalid, clearing session');
+        setToken(null);
+        localStorage.removeItem(SESSION_TOKEN);
+        setUser(null);
+        await db.userProfile.clear(); // Clear cached profile
+      } else {
+        console.log('Network error, using cached profile:', err.message);
+        // Keep cached user if available
+      }
     }
     setIsLoading(false);
   };
@@ -64,6 +100,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setToken(res.token);
       const me = await fetchMe();
       setUser(me);
+      // Cache profile
+      await db.userProfile.put({
+        id: me.id.toString(),
+        username: me.username,
+        email: me.email,
+        stats: me.stats,
+        lastSynced: Date.now()
+      });
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Login failed' };
@@ -79,6 +123,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setToken(res.token);
       const me = await fetchMe();
       setUser(me);
+      // Cache profile
+      await db.userProfile.put({
+        id: me.id.toString(),
+        username: me.username,
+        email: me.email,
+        stats: me.stats,
+        lastSynced: Date.now()
+      });
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Signup failed' };
@@ -88,11 +140,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const logout = () => {
     setUser(null);
     setToken(null);
+    localStorage.removeItem(SESSION_TOKEN);
+    db.userProfile.clear(); // Clear cached profile
   };
 
   const refresh = async () => {
     const me = await fetchMe();
     setUser(me);
+    // Update cache
+    await db.userProfile.put({
+      id: me.id.toString(),
+      username: me.username,
+      email: me.email,
+      stats: me.stats,
+      lastSynced: Date.now()
+    });
   };
 
   return (

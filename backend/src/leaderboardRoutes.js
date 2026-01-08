@@ -9,10 +9,23 @@ router.get('/global', requireAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
     const { rows } = await pool.query(
-      `SELECT u.id, u.username, u.email, s.total_distance_km, s.territories_owned, s.area_km2
-       FROM user_stats s 
-       JOIN users u ON u.id = s.user_id
-       ORDER BY s.total_distance_km DESC
+      `WITH base AS (
+         SELECT
+           u.id,
+           u.username,
+           u.email,
+           COALESCE(s.total_distance_km, 0) AS total_distance_km,
+           COALESCE(s.territories_owned, 0) AS territories_owned,
+           COALESCE(s.area_km2, 0) AS area_km2,
+           (SELECT COUNT(*)::int FROM runs r WHERE r.user_id = u.id) AS total_runs
+         FROM users u
+         LEFT JOIN user_stats s ON s.user_id = u.id
+       )
+       SELECT
+         *,
+         ROW_NUMBER() OVER (ORDER BY total_distance_km DESC) AS rank
+       FROM base
+       ORDER BY total_distance_km DESC
        LIMIT $1`,
       [limit]
     );
@@ -28,15 +41,29 @@ router.get('/friends', requireAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
     const { rows } = await pool.query(
-      `SELECT u.id, u.username, u.email, s.total_distance_km, s.territories_owned, s.area_km2
-       FROM user_stats s 
-       JOIN users u ON u.id = s.user_id
-       WHERE u.id IN (
-         SELECT friend_id FROM friendships WHERE user_id = $1 AND status = 'accepted'
+      `WITH friend_ids AS (
+         SELECT friend_id AS id FROM friendships WHERE user_id = $1 AND status = 'accepted'
          UNION
-         SELECT user_id FROM friendships WHERE friend_id = $1 AND status = 'accepted'
+         SELECT user_id AS id FROM friendships WHERE friend_id = $1 AND status = 'accepted'
+       ),
+       base AS (
+         SELECT
+           u.id,
+           u.username,
+           u.email,
+           COALESCE(s.total_distance_km, 0) AS total_distance_km,
+           COALESCE(s.territories_owned, 0) AS territories_owned,
+           COALESCE(s.area_km2, 0) AS area_km2,
+           (SELECT COUNT(*)::int FROM runs r WHERE r.user_id = u.id) AS total_runs
+         FROM users u
+         LEFT JOIN user_stats s ON s.user_id = u.id
+         WHERE u.id IN (SELECT id FROM friend_ids)
        )
-       ORDER BY s.total_distance_km DESC
+       SELECT
+         *,
+         ROW_NUMBER() OVER (ORDER BY total_distance_km DESC) AS rank
+       FROM base
+       ORDER BY total_distance_km DESC
        LIMIT $2`,
       [req.userId, limit]
     );

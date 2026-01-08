@@ -15,7 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
-import { api } from '@/lib/api';
+import { api, getApiErrorMessage } from '@/lib/api';
+import NotificationCenter from '@/components/NotificationCenter';
 import BottomNavigation from '@/components/BottomNavigation';
 
 interface Friend {
@@ -57,9 +58,32 @@ interface Team {
   name: string;
   description?: string;
   role?: string;
+  visibility?: string;
   member_count: number;
   created_by: number;
   creator_name?: string;
+  total_distance_km?: number;
+  total_runs?: number;
+  territories_owned?: number;
+}
+
+interface TeamMember {
+  id: number;
+  username: string;
+  email: string;
+  avatar_url?: string;
+  role: string;
+  joined_at: string;
+}
+
+interface LeaderboardUser {
+  id: number;
+  username: string;
+  avatar_url?: string;
+  total_distance_km: number;
+  territories_owned: number;
+  total_runs: number;
+  rank: number;
 }
 
 const Social = () => {
@@ -74,11 +98,20 @@ const Social = () => {
   const [myTeams, setMyTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFriendsOnMap, setShowFriendsOnMap] = useState(false);
+  const [globalLeaderboard, setGlobalLeaderboard] = useState<LeaderboardUser[]>([]);
+  const [friendsLeaderboard, setFriendsLeaderboard] = useState<LeaderboardUser[]>([]);
+  const [teamsLeaderboard, setTeamsLeaderboard] = useState<Team[]>([]);
 
   const [friendDialogOpen, setFriendDialogOpen] = useState(false);
   const [teamDialogOpen, setTeamDialogOpen] = useState(false);
+  const [teamSettingsDialogOpen, setTeamSettingsDialogOpen] = useState(false);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [friendEmail, setFriendEmail] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [newTeam, setNewTeam] = useState({ name: '', description: '' });
 
   useEffect(() => {
@@ -94,7 +127,10 @@ const Social = () => {
         activityRes,
         weeklyRes,
         teamsRes,
-        myTeamsRes
+        myTeamsRes,
+        globalLeaderboardRes,
+        friendsLeaderboardRes,
+        teamsLeaderboardRes
       ] = await Promise.all([
         api.get('/friends'),
         api.get('/friends/stats'),
@@ -102,6 +138,9 @@ const Social = () => {
         api.get('/friends/weekly-comparison'),
         api.get('/teams'),
         api.get('/teams/my-teams'),
+        api.get('/leaderboard/global?limit=100').catch(() => ({ leaderboard: [] })),
+        api.get('/leaderboard/friends').catch(() => ({ leaderboard: [] })),
+        api.get('/leaderboard/teams?limit=100').catch(() => ({ leaderboard: [] }))
       ]);
 
       setFriends(friendsRes.friends || []);
@@ -110,6 +149,9 @@ const Social = () => {
       setWeeklyComparison(weeklyRes.comparison);
       setTeams(teamsRes.teams || []);
       setMyTeams(myTeamsRes.teams || []);
+      setGlobalLeaderboard(globalLeaderboardRes.leaderboard || []);
+      setFriendsLeaderboard(friendsLeaderboardRes.leaderboard || []);
+      setTeamsLeaderboard(teamsLeaderboardRes.leaderboard || []);
     } catch (error) {
       console.error('Failed to fetch data:', error);
       toast({
@@ -146,7 +188,7 @@ const Social = () => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.error || 'Failed to send friend request',
+        description: getApiErrorMessage(error, 'Failed to send friend request'),
         variant: 'destructive',
       });
     }
@@ -163,7 +205,7 @@ const Social = () => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.error || 'Failed to accept friend request',
+        description: getApiErrorMessage(error, 'Failed to accept friend request'),
         variant: 'destructive',
       });
     }
@@ -180,7 +222,7 @@ const Social = () => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.error || 'Failed to remove friend',
+        description: getApiErrorMessage(error, 'Failed to remove friend'),
         variant: 'destructive',
       });
     }
@@ -210,7 +252,7 @@ const Social = () => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.error || 'Failed to create team',
+        description: getApiErrorMessage(error, 'Failed to create team'),
         variant: 'destructive',
       });
     }
@@ -227,7 +269,7 @@ const Social = () => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.error || 'Failed to join team',
+        description: getApiErrorMessage(error, 'Failed to join team'),
         variant: 'destructive',
       });
     }
@@ -244,7 +286,122 @@ const Social = () => {
     } catch (error: any) {
       toast({
         title: 'Error',
-        description: error.response?.data?.error || 'Failed to leave team',
+        description: getApiErrorMessage(error, 'Failed to leave team'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleGenerateInvite = async (teamId: number) => {
+    try {
+      const response = await api.post(`/teams/${teamId}/invitations`, {
+        expiresInDays: 7,
+        maxUses: null
+      });
+      
+      const invitationCode = response.invitation.invitation_code;
+      const invitationLink = `${window.location.origin}/invite/${invitationCode}`;
+      
+      // Copy link to clipboard
+      await navigator.clipboard.writeText(invitationLink);
+      
+      toast({
+        title: 'Invitation Link Created! 🎉',
+        description: `Link copied to clipboard. Share it with your teammates!`,
+        duration: 5000,
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to generate invitation'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleJoinByCode = async () => {
+    try {
+      if (!inviteCode.trim()) {
+        toast({
+          title: 'Error',
+          description: 'Please enter an invitation code',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const response = await api.post('/teams/join-by-invite', {
+        invitationCode: inviteCode.trim()
+      });
+
+      toast({
+        title: 'Success',
+        description: response.message || 'Joined team successfully!',
+      });
+
+      setInviteDialogOpen(false);
+      setInviteCode('');
+      fetchData();
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to join team'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleUpdateTeamSettings = async (teamId: number, visibility: string) => {
+    try {
+      await api.patch(`/teams/${teamId}/settings`, { visibility });
+      
+      toast({
+        title: 'Success',
+        description: 'Team settings updated',
+      });
+      
+      fetchData();
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to update settings'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleViewMembers = async (team: Team) => {
+    try {
+      setSelectedTeam(team);
+      const response = await api.get(`/teams/${team.id}/members`);
+      setTeamMembers(response.members || []);
+      setMembersDialogOpen(true);
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to load members'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleRemoveMember = async (teamId: number, userId: number, username: string) => {
+    try {
+      await api.delete(`/teams/${teamId}/members/${userId}`);
+      
+      toast({
+        title: 'Success',
+        description: `Removed ${username} from team`,
+      });
+      
+      // Refresh members list
+      const response = await api.get(`/teams/${teamId}/members`);
+      setTeamMembers(response.members || []);
+      fetchData();
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to remove member'),
         variant: 'destructive',
       });
     }
@@ -301,8 +458,13 @@ const Social = () => {
       {/* Header */}
       <div className="bg-black/20 backdrop-blur-xl border-b border-white/10 sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-white">Social</h1>
-          <p className="text-white/60 text-sm">Connect with runners & compete</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-white">Social</h1>
+              <p className="text-white/60 text-sm">Connect with runners & compete</p>
+            </div>
+            <NotificationCenter />
+          </div>
         </div>
       </div>
 
@@ -372,10 +534,10 @@ const Social = () => {
           </Card>
         </motion.div>
 
-        <Tabs defaultValue="feed" className="w-full">
+        <Tabs defaultValue="social" className="w-full">
           <TabsList className="grid w-full grid-cols-3 bg-white/10">
-            <TabsTrigger value="feed" className="text-white data-[state=active]:bg-white/20">
-              Activity
+            <TabsTrigger value="social" className="text-white data-[state=active]:bg-white/20">
+              Social
             </TabsTrigger>
             <TabsTrigger value="friends" className="text-white data-[state=active]:bg-white/20">
               Friends
@@ -385,58 +547,68 @@ const Social = () => {
             </TabsTrigger>
           </TabsList>
 
-          {/* Activity Feed */}
-          <TabsContent value="feed" className="space-y-4">
-            {activities.length === 0 ? (
-              <Card className="bg-white/5 backdrop-blur-xl border-white/10">
-                <CardContent className="pt-6">
+          {/* Global Leaderboard */}
+          <TabsContent value="social" className="space-y-4">
+            <Card className="bg-white/5 backdrop-blur-xl border-white/10">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-yellow-400" />
+                    Global Leaderboard
+                  </CardTitle>
+                  <Badge className="bg-yellow-500/20 text-yellow-400">Top Runners</Badge>
+                </div>
+                <CardDescription className="text-white/60">
+                  Highest distance runners worldwide
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {globalLeaderboard.length === 0 ? (
                   <div className="text-center py-8">
-                    <Activity className="w-12 h-12 text-white/40 mx-auto mb-3" />
-                    <p className="text-white/60">No recent activity</p>
-                    <p className="text-white/40 text-sm">Add friends to see their runs!</p>
+                    <Trophy className="w-12 h-12 text-white/40 mx-auto mb-3" />
+                    <p className="text-white/60">No runners yet</p>
                   </div>
-                </CardContent>
-              </Card>
-            ) : (
-              activities.map((activity, index) => (
-                <motion.div
-                  key={activity.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.05 }}
-                >
-                  <Card className="bg-white/5 backdrop-blur-xl border-white/10">
-                    <CardContent className="pt-4">
-                      <div className="flex items-start gap-3">
-                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                          <span className="text-white font-bold text-sm">
-                            {activity.username.charAt(0).toUpperCase()}
+                ) : (
+                  <div className="space-y-2">
+                    {globalLeaderboard.map((user, index) => (
+                      <motion.div
+                        key={user.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.03 }}
+                        className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+                      >
+                        <div className="flex-shrink-0 w-8 text-center">
+                          {index === 0 && <span className="text-2xl">🥇</span>}
+                          {index === 1 && <span className="text-2xl">🥈</span>}
+                          {index === 2 && <span className="text-2xl">🥉</span>}
+                          {index > 2 && <span className="text-white/60 font-bold">#{index + 1}</span>}
+                        </div>
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
+                          <span className="text-white font-bold">
+                            {user.username.charAt(0).toUpperCase()}
                           </span>
                         </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-white font-medium">{activity.username}</span>
-                            <span className="text-white/40 text-sm">
-                              {formatTimeAgo(activity.timestamp)}
-                            </span>
-                          </div>
-                          <p className="text-white/80">
-                            {formatActivityMessage(activity)}
-                          </p>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-white font-medium truncate">{user.username}</div>
+                          <div className="text-white/60 text-sm">{user.total_runs} runs</div>
                         </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              ))
-            )}
+                        <div className="text-right flex-shrink-0">
+                          <div className="text-white font-bold text-lg">{parseFloat(user.total_distance_km).toFixed(1)} km</div>
+                          <div className="text-white/60 text-xs">{user.territories_owned} zones</div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
-          {/* Friends Tab */}
+          {/* Friends Leaderboard */}
           <TabsContent value="friends" className="space-y-4">
             {/* Add Friend Button */}
-            <div className="flex justify-between items-center">
-              <h3 className="text-white text-lg font-semibold">Friends ({friends.length})</h3>
+            <div className="flex justify-between items-center mb-4">
               <Dialog open={friendDialogOpen} onOpenChange={setFriendDialogOpen}>
                 <DialogTrigger asChild>
                   <Button className="bg-green-500 hover:bg-green-600">
@@ -470,140 +642,140 @@ const Social = () => {
               </Dialog>
             </div>
 
-            {/* Friends List */}
-            {friends.length === 0 ? (
-              <Card className="bg-white/5 backdrop-blur-xl border-white/10">
-                <CardContent className="pt-6">
+            <Card className="bg-white/5 backdrop-blur-xl border-white/10">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-green-400" />
+                    Friends Leaderboard
+                  </CardTitle>
+                  <Badge className="bg-green-500/20 text-green-400">Competing</Badge>
+                </div>
+                <CardDescription className="text-white/60">
+                  See how you rank against your friends
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {friendsLeaderboard.length === 0 ? (
                   <div className="text-center py-8">
                     <Users className="w-12 h-12 text-white/40 mx-auto mb-3" />
                     <p className="text-white/60">No friends yet</p>
                     <p className="text-white/40 text-sm">Add friends to start competing!</p>
                   </div>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-4">
-                {friends.map((friend) => {
-                  const stats = friendStats.find(s => s.id === friend.id);
-                  return (
-                    <Card key={friend.id} className="bg-white/5 backdrop-blur-xl border-white/10">
-                      <CardContent className="pt-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                              <span className="text-white font-bold">
-                                {friend.username.charAt(0).toUpperCase()}
-                              </span>
-                            </div>
-                            <div>
-                              <div className="text-white font-medium">{friend.username}</div>
-                              {stats && (
-                                <div className="text-white/60 text-sm">
-                                  🏃 {stats.totalDistanceKm.toFixed(1)} km · 🗺️ {stats.territoriesOwned} zones
-                                </div>
-                              )}
-                              {stats?.lastRunAt && (
-                                <div className="text-white/40 text-xs">
-                                  Last run: {formatLastActive(stats.lastRunAt)}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Badge
-                              variant={friend.status === 'accepted' ? 'default' : 'secondary'}
-                              className={
-                                friend.status === 'accepted'
-                                  ? 'bg-green-500/20 text-green-400'
-                                  : 'bg-yellow-500/20 text-yellow-400'
-                              }
-                            >
-                              {friend.status === 'accepted' ? 'Friends' : 'Pending'}
-                            </Badge>
-                            {friend.status === 'pending' && (
-                              <div className="flex gap-1">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 w-8 p-0 border-green-500/50 text-green-400 hover:bg-green-500/10"
-                                  onClick={() => handleAcceptFriend(friend.id)}
-                                >
-                                  <Check className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 w-8 p-0 border-red-500/50 text-red-400 hover:bg-red-500/10"
-                                  onClick={() => handleRemoveFriend(friend.id)}
-                                >
-                                  <X className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            )}
-                            {friend.status === 'accepted' && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-red-500/50 text-red-400 hover:bg-red-500/10"
-                                onClick={() => handleRemoveFriend(friend.id)}
-                              >
-                                Remove
-                              </Button>
-                            )}
-                          </div>
+                ) : (
+                  <div className="space-y-2">
+                    {friendsLeaderboard.map((user, index) => (
+                      <motion.div
+                        key={user.id}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.03 }}
+                        className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+                      >
+                        <div className="flex-shrink-0 w-8 text-center">
+                          {index === 0 && <span className="text-2xl">🥇</span>}
+                          {index === 1 && <span className="text-2xl">🥈</span>}
+                          {index === 2 && <span className="text-2xl">🥉</span>}
+                          {index > 2 && <span className="text-white/60 font-bold">#{index + 1}</span>}
                         </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-            )}
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center flex-shrink-0">
+                          <span className="text-white font-bold">
+                            {user.username.charAt(0).toUpperCase()}
+                          </span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-white font-medium truncate">{user.username}</div>
+                          <div className="text-white/60 text-sm">{user.total_runs} runs</div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="text-white font-bold text-lg">{parseFloat(user.total_distance_km).toFixed(1)} km</div>
+                          <div className="text-white/60 text-xs">{user.territories_owned} zones</div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Teams Tab */}
           <TabsContent value="teams" className="space-y-4">
-            {/* Create Team Button */}
-            <div className="flex justify-between items-center">
+            {/* Create Team and Join by Code Buttons */}
+            <div className="flex justify-between items-center gap-2">
               <h3 className="text-white text-lg font-semibold">Teams ({myTeams.length})</h3>
-              <Dialog open={teamDialogOpen} onOpenChange={setTeamDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button className="bg-purple-500 hover:bg-purple-600">
-                    <Users className="w-4 h-4 mr-2" />
-                    Create Team
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Create New Team</DialogTitle>
-                    <DialogDescription>
-                      Create a team to compete together in competitions and share territory conquests.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 mt-4">
-                    <div>
-                      <Label htmlFor="teamName">Team Name</Label>
-                      <Input
-                        id="teamName"
-                        placeholder="Running Warriors"
-                        value={newTeam.name}
-                        onChange={(e) => setNewTeam(prev => ({ ...prev, name: e.target.value }))}
-                      />
+              <div className="flex gap-2">
+                <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="border-white/20 text-white hover:bg-white/10">
+                      <Mail className="w-4 h-4 mr-2" />
+                      Join by Code
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Join Team by Invitation</DialogTitle>
+                      <DialogDescription>
+                        Enter the invitation code shared by a team admin
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 mt-4">
+                      <div>
+                        <Label htmlFor="inviteCode">Invitation Code</Label>
+                        <Input
+                          id="inviteCode"
+                          placeholder="abc123xyz456"
+                          value={inviteCode}
+                          onChange={(e) => setInviteCode(e.target.value)}
+                        />
+                      </div>
+                      <Button onClick={handleJoinByCode} className="w-full">
+                        Join Team
+                      </Button>
                     </div>
-                    <div>
-                      <Label htmlFor="teamDesc">Description (Optional)</Label>
-                      <Input
-                        id="teamDesc"
-                        placeholder="A team for serious runners"
-                        value={newTeam.description}
-                        onChange={(e) => setNewTeam(prev => ({ ...prev, description: e.target.value }))}
-                      />
-                    </div>
-                    <Button onClick={handleCreateTeam} className="w-full">
+                  </DialogContent>
+                </Dialog>
+
+                <Dialog open={teamDialogOpen} onOpenChange={setTeamDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button className="bg-purple-500 hover:bg-purple-600">
+                      <Users className="w-4 h-4 mr-2" />
                       Create Team
                     </Button>
-                  </div>
-                </DialogContent>
-              </Dialog>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create New Team</DialogTitle>
+                      <DialogDescription>
+                        Create a team to compete together in competitions and share territory conquests.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 mt-4">
+                      <div>
+                        <Label htmlFor="teamName">Team Name</Label>
+                        <Input
+                          id="teamName"
+                          placeholder="Running Warriors"
+                          value={newTeam.name}
+                          onChange={(e) => setNewTeam(prev => ({ ...prev, name: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="teamDesc">Description (Optional)</Label>
+                        <Input
+                          id="teamDesc"
+                          placeholder="A team for serious runners"
+                          value={newTeam.description}
+                          onChange={(e) => setNewTeam(prev => ({ ...prev, description: e.target.value }))}
+                        />
+                      </div>
+                      <Button onClick={handleCreateTeam} className="w-full">
+                        Create Team
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
             </div>
 
             {/* Teams List */}
@@ -613,7 +785,7 @@ const Social = () => {
                   <div className="text-center py-8">
                     <Shield className="w-12 h-12 text-white/40 mx-auto mb-3" />
                     <p className="text-white/60">No teams yet</p>
-                    <p className="text-white/40 text-sm">Create a team to compete with friends!</p>
+                    <p className="text-white/40 text-sm">Create a team or join with an invitation code!</p>
                   </div>
                 </CardContent>
               </Card>
@@ -622,25 +794,143 @@ const Social = () => {
                 {myTeams.map((team) => (
                   <Card key={team.id} className="bg-white/5 backdrop-blur-xl border-white/10">
                     <CardContent className="pt-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-                            <Shield className="w-6 h-6 text-white" />
-                          </div>
-                          <div>
-                            <div className="text-white font-medium">{team.name}</div>
-                            <div className="text-white/60 text-sm">
-                              {team.member_count} member{team.member_count !== 1 ? 's' : ''}
-                              {team.role && ` · ${team.role}`}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                              <Shield className="w-6 h-6 text-white" />
                             </div>
-                            {team.description && (
-                              <div className="text-white/40 text-xs mt-1">{team.description}</div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <div className="text-white font-medium">{team.name}</div>
+                                {team.visibility === 'private' && (
+                                  <Badge variant="secondary" className="bg-white/10 text-white/70 text-xs">
+                                    <EyeOff className="w-3 h-3 mr-1" />
+                                    Private
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-white/60 text-sm">
+                                {team.member_count} member{team.member_count !== 1 ? 's' : ''}
+                                {team.role && ` · ${team.role}`}
+                              </div>
+                              {team.description && (
+                                <div className="text-white/40 text-xs mt-1">{team.description}</div>
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="flex gap-2">
+                            {/* View Team Page */}
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="border-white/20 text-white hover:bg-white/10"
+                              onClick={() => navigate(`/team/${team.id}`)}
+                            >
+                              <Shield className="w-4 h-4 mr-1" />
+                              View Team
+                            </Button>
+
+                            {/* View Members - available to all */}
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="border-white/20 text-white hover:bg-white/10"
+                              onClick={() => handleViewMembers(team)}
+                            >
+                              <Users className="w-4 h-4 mr-1" />
+                              Members
+                            </Button>
+
+                            {/* Settings - admin only */}
+                            {team.role === 'admin' && (
+                              <Dialog open={teamSettingsDialogOpen && selectedTeam?.id === team.id} 
+                                      onOpenChange={(open) => {
+                                        setTeamSettingsDialogOpen(open);
+                                        if (open) setSelectedTeam(team);
+                                        else setSelectedTeam(null);
+                                      }}>
+                              <DialogTrigger asChild>
+                                <Button variant="outline" size="sm" className="border-white/20 text-white hover:bg-white/10">
+                                  Settings
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent>
+                                <DialogHeader>
+                                  <DialogTitle>Team Settings</DialogTitle>
+                                  <DialogDescription>
+                                    Manage your team settings and invitations
+                                  </DialogDescription>
+                                </DialogHeader>
+                                <div className="space-y-4 mt-4">
+                                  {/* Visibility Toggle */}
+                                  <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+                                    <div className="flex items-center gap-3">
+                                      {team.visibility === 'public' ? (
+                                        <Eye className="w-5 h-5 text-green-400" />
+                                      ) : (
+                                        <EyeOff className="w-5 h-5 text-yellow-400" />
+                                      )}
+                                      <div>
+                                        <div className="text-white font-medium">Team Visibility</div>
+                                        <div className="text-white/60 text-sm">
+                                          {team.visibility === 'public' ? 'Anyone can see this team' : 'Invite-only team'}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <Switch
+                                      checked={team.visibility === 'public'}
+                                      onCheckedChange={(checked) => 
+                                        handleUpdateTeamSettings(team.id, checked ? 'public' : 'private')
+                                      }
+                                    />
+                                  </div>
+
+                                  {/* Generate Invitation */}
+                                  <div className="space-y-2">
+                                    <Label>Team Invitations</Label>
+                                    <Button 
+                                      onClick={() => handleGenerateInvite(team.id)} 
+                                      className="w-full"
+                                      variant="outline"
+                                    >
+                                      <Mail className="w-4 h-4 mr-2" />
+                                      Generate Invitation Link
+                                    </Button>
+                                    <p className="text-white/40 text-xs">
+                                      Link will be copied to clipboard and can be shared anywhere
+                                    </p>
+                                  </div>
+
+                                  {/* Leave Team (for non-admins) or Delete */}
+                                  <Button
+                                    variant="outline"
+                                    className="w-full border-red-500/50 text-red-400 hover:bg-red-500/10"
+                                    onClick={() => {
+                                      handleLeaveTeam(team.id);
+                                      setTeamSettingsDialogOpen(false);
+                                    }}
+                                  >
+                                    Leave Team
+                                  </Button>
+                                </div>
+                              </DialogContent>
+                            </Dialog>
                             )}
                           </div>
+
+                          {team.role !== 'admin' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                              onClick={() => handleLeaveTeam(team.id)}
+                            >
+                              Leave
+                            </Button>
+                          )}
                         </div>
-                        <Button variant="outline" size="sm" className="border-white/20 text-white hover:bg-white/10">
-                          View Team
-                        </Button>
                       </div>
                     </CardContent>
                   </Card>
@@ -650,6 +940,53 @@ const Social = () => {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Team Members Dialog */}
+      <Dialog open={membersDialogOpen} onOpenChange={setMembersDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Team Members</DialogTitle>
+            <DialogDescription>
+              {selectedTeam?.name} - {teamMembers.length} member{teamMembers.length !== 1 ? 's' : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+            {teamMembers.map((member) => (
+              <div key={member.id} className="flex items-center justify-between p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
+                    <span className="text-white font-bold">
+                      {member.username.charAt(0).toUpperCase()}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-white font-medium">{member.username}</div>
+                    <div className="text-white/60 text-sm">{member.email}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge 
+                    variant={member.role === 'admin' ? 'default' : 'secondary'}
+                    className={member.role === 'admin' ? 'bg-purple-500/20 text-purple-400' : 'bg-white/10 text-white/70'}
+                  >
+                    {member.role}
+                  </Badge>
+                  {selectedTeam?.role === 'admin' && member.role !== 'admin' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-red-500/50 text-red-400 hover:bg-red-500/10"
+                      onClick={() => handleRemoveMember(selectedTeam.id, member.id, member.username)}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <BottomNavigation />
     </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Trophy, Plus, Users, Calendar, MapPin, ArrowLeft } from 'lucide-react';
+import { Trophy, Plus, Users, Calendar, MapPin, ArrowLeft, Shield } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -8,9 +8,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { api } from '@/lib/api';
+import { api, getApiErrorMessage } from '@/lib/api';
 import BottomNavigation from '@/components/BottomNavigation';
 
 interface Competition {
@@ -18,10 +20,30 @@ interface Competition {
   name: string;
   visibility: string;
   scoring: string;
+  is_team_based?: boolean;
   starts_at: string;
   ends_at: string;
   member_count: number;
   created_by: number;
+}
+
+interface Team {
+  id: number;
+  name: string;
+  description?: string;
+  member_count: number;
+  role?: string;
+}
+
+interface TeamLeaderboardEntry {
+  id: number;
+  name: string;
+  description?: string;
+  member_count: number;
+  total_score: number;
+  total_distance: number;
+  total_runs: number;
+  territories_conquered: number;
 }
 
 const Competitions = () => {
@@ -30,13 +52,19 @@ const Competitions = () => {
   
   const [competitions, setCompetitions] = useState<Competition[]>([]);
   const [myCompetitions, setMyCompetitions] = useState<Competition[]>([]);
+  const [myTeams, setMyTeams] = useState<Team[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<number | null>(null);
+  const [teamLeaderboard, setTeamLeaderboard] = useState<TeamLeaderboardEntry[]>([]);
+  const [viewingCompetition, setViewingCompetition] = useState<Competition | null>(null);
   const [loading, setLoading] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [teamDialogOpen, setTeamDialogOpen] = useState(false);
   
   const [newCompetition, setNewCompetition] = useState({
     name: '',
     visibility: 'public',
     scoring: 'territories',
+    isTeamBased: false,
     startsAt: '',
     endsAt: '',
   });
@@ -48,13 +76,15 @@ const Competitions = () => {
   const fetchCompetitions = async () => {
     try {
       setLoading(true);
-      const [allResponse, myResponse] = await Promise.all([
+      const [allResponse, myResponse, teamsResponse] = await Promise.all([
         api.get('/competitions'),
         api.get('/competitions/my-competitions'),
+        api.get('/teams/my-teams'),
       ]);
 
       setCompetitions(allResponse.competitions || []);
       setMyCompetitions(myResponse.competitions || []);
+      setMyTeams(teamsResponse.teams || []);
     } catch (error) {
       console.error('Failed to fetch competitions:', error);
       toast({
@@ -90,6 +120,7 @@ const Competitions = () => {
         name: '',
         visibility: 'public',
         scoring: 'territories',
+        isTeamBased: false,
         startsAt: '',
         endsAt: '',
       });
@@ -124,6 +155,40 @@ const Competitions = () => {
     }
   };
 
+  const handleJoinTeamCompetition = async (competitionId: number, teamId: number) => {
+    try {
+      await api.post(`/competitions/${competitionId}/teams/${teamId}`);
+
+      toast({
+        title: 'Success',
+        description: 'Team joined competition!',
+      });
+
+      setTeamDialogOpen(false);
+      fetchCompetitions();
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to join team to competition'),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleViewTeamLeaderboard = async (competition: Competition) => {
+    try {
+      const response = await api.get(`/competitions/${competition.id}/team-leaderboard`);
+      setTeamLeaderboard(response.leaderboard || []);
+      setViewingCompetition(competition);
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: getApiErrorMessage(error, 'Failed to load team leaderboard'),
+        variant: 'destructive',
+      });
+    }
+  };
+
   const formatDate = (dateString: string) => {
     if (!dateString) return 'No date set';
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -143,26 +208,87 @@ const Competitions = () => {
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
             <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Trophy className="w-6 h-6 text-primary" />
+              {competition.is_team_based ? (
+                <Shield className="w-6 h-6 text-primary" />
+              ) : (
+                <Trophy className="w-6 h-6 text-primary" />
+              )}
             </div>
             <div>
-              <h3 className="font-display font-bold text-lg text-foreground">
-                {competition.name}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="font-display font-bold text-lg text-foreground">
+                  {competition.name}
+                </h3>
+                {competition.is_team_based && (
+                  <Badge variant="secondary" className="bg-purple-500/20 text-purple-400">
+                    Team
+                  </Badge>
+                )}
+              </div>
               <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
                 <Users className="w-4 h-4" />
-                <span>{competition.member_count || 0} participants</span>
+                <span>{competition.member_count || 0} {competition.is_team_based ? 'teams' : 'participants'}</span>
               </div>
             </div>
           </div>
-          {showJoin && (
-            <Button
-              size="sm"
-              onClick={() => handleJoinCompetition(competition.id)}
-            >
-              Join
-            </Button>
-          )}
+          <div className="flex gap-2">
+            {competition.is_team_based && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleViewTeamLeaderboard(competition)}
+              >
+                Standings
+              </Button>
+            )}
+            {showJoin && (
+              <>
+                {competition.is_team_based ? (
+                  <Dialog open={teamDialogOpen} onOpenChange={setTeamDialogOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm">
+                        Join with Team
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Select Your Team</DialogTitle>
+                        <DialogDescription>
+                          Choose which team to join this competition with
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                        {myTeams.length === 0 ? (
+                          <p className="text-center text-muted-foreground py-4">
+                            You need to be part of a team to join
+                          </p>
+                        ) : (
+                          myTeams.map((team) => (
+                            <Button
+                              key={team.id}
+                              variant="outline"
+                              className="w-full justify-start"
+                              onClick={() => handleJoinTeamCompetition(competition.id, team.id)}
+                            >
+                              <Shield className="w-4 h-4 mr-2" />
+                              {team.name} ({team.member_count} members)
+                            </Button>
+                          ))
+                        )}
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => handleJoinCompetition(competition.id)}
+                  >
+                    Join
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -264,6 +390,24 @@ const Competitions = () => {
                   </Select>
                 </div>
 
+                <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+                  <div className="flex items-center gap-3">
+                    <Shield className="w-5 h-5 text-primary" />
+                    <div>
+                      <div className="font-medium">Team Competition</div>
+                      <div className="text-sm text-muted-foreground">
+                        Teams compete collectively instead of individuals
+                      </div>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={newCompetition.isTeamBased}
+                    onCheckedChange={(checked) =>
+                      setNewCompetition({ ...newCompetition, isTeamBased: checked })
+                    }
+                  />
+                </div>
+
                 <div>
                   <Label htmlFor="starts">Start Date</Label>
                   <Input
@@ -362,6 +506,70 @@ const Competitions = () => {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* Team Leaderboard Dialog */}
+      <Dialog open={!!viewingCompetition} onOpenChange={() => setViewingCompetition(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Team Standings - {viewingCompetition?.name}</DialogTitle>
+            <DialogDescription>
+              Real-time rankings based on collective team performance
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+            {teamLeaderboard.length === 0 ? (
+              <div className="text-center py-8">
+                <Shield className="w-12 h-12 text-muted-foreground/50 mx-auto mb-3" />
+                <p className="text-muted-foreground">No teams have joined yet</p>
+              </div>
+            ) : (
+              teamLeaderboard.map((team, index) => (
+                <div
+                  key={team.id}
+                  className="flex items-center gap-4 p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                >
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full bg-primary/10 font-bold text-primary">
+                    {index + 1}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-semibold text-foreground">{team.name}</h4>
+                      {index === 0 && (
+                        <Badge className="bg-yellow-500/20 text-yellow-400">
+                          🏆 1st Place
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
+                      <span>{team.member_count} members</span>
+                      <span>•</span>
+                      <span>{team.total_distance.toFixed(1)} km</span>
+                      <span>•</span>
+                      <span>{team.total_runs} runs</span>
+                      {viewingCompetition?.scoring === 'territories' && (
+                        <>
+                          <span>•</span>
+                          <span>{team.territories_conquered} territories</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold text-primary">
+                      {viewingCompetition?.scoring === 'distance'
+                        ? `${team.total_distance.toFixed(1)} km`
+                        : viewingCompetition?.scoring === 'runs'
+                        ? `${team.total_runs} runs`
+                        : `${team.territories_conquered} zones`}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Score</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <BottomNavigation />
     </div>

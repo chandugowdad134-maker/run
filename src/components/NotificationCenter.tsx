@@ -47,7 +47,7 @@ const NotificationCenter = () => {
     try {
       setLoading(true);
       const response = await api.get('/notifications?limit=50');
-      setNotifications(response.data.notifications || []);
+      setNotifications(response.notifications || []);
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
     } finally {
@@ -58,7 +58,7 @@ const NotificationCenter = () => {
   const fetchUnreadCount = async () => {
     try {
       const response = await api.get('/notifications/unread-count');
-      setUnreadCount(response.data.count || 0);
+      setUnreadCount(response.count || 0);
     } catch (error) {
       console.error('Failed to fetch unread count:', error);
     }

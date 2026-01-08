@@ -12,6 +12,8 @@ import LiveRunMap from '@/components/LiveRunMap';
 import RunContextPanel from '@/components/RunContextPanel';
 import TerritoryClickPopup from '@/components/TerritoryClickPopup';
 import { calculateTotalDistance, validateRunSpeed, getTerritoriesClaimed } from '@/lib/geoutils';
+import { db } from '@/lib/db';
+import { validateRunSubmission, calculateTerritoryAcquisition, GPSPoint as TerritoryGPSPoint } from '@/lib/territory';
 
 interface GPSPoint {
   lat: number;
@@ -51,6 +53,7 @@ const ActiveRun = () => {
   const [currentZoom, setCurrentZoom] = useState(16);
   const [clickedTerritory, setClickedTerritory] = useState<any>(null);
   const [territoryDetails, setTerritoryDetails] = useState<any>(null);
+  const [activityType, setActivityType] = useState<'run' | 'cycle'>('run');
   
   const watchIdRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -334,38 +337,77 @@ const ActiveRun = () => {
 
     try {
       const durationSec = Math.floor(elapsedTime / 1000);
-      const points = gpsPoints.map((p) => ({
+      const points: TerritoryGPSPoint[] = gpsPoints.map((p) => ({
         lat: p.lat,
         lng: p.lng,
         timestamp: p.timestamp,
+        accuracy: p.accuracy,
       }));
 
-      const response = await api.post('/runs', {
-        points,
-        distanceKm: distance,
-        durationSec,
+      // Local validation
+      const validation = validateRunSubmission(points, activityType);
+      if (!validation.valid) {
+        toast({
+          title: 'Run Validation Failed',
+          description: validation.errors.join('. '),
+          variant: 'destructive',
+        });
+        resetRun();
+        return;
+      }
+
+      // Calculate territory acquisition locally
+      const localTerritories = new Map(
+        (await db.territories.toArray()).map(t => [t.tileId, { ownerId: t.ownerId, strength: t.strength }])
+      );
+      const { touchedTiles, updatedTiles } = calculateTerritoryAcquisition(points, user!.id.toString(), localTerritories);
+
+      // Update local territories
+      for (const update of updatedTiles) {
+        await db.territories.put({
+          tileId: update.tileId,
+          ownerId: update.ownerId,
+          strength: update.strength,
+          geometry: null, // We'll compute on demand
+          lastUpdated: Date.now()
+        });
+      }
+
+      // Store run locally
+      const runId = await db.runs.add({
+        gpsPoints: points,
+        distance: distance,
+        duration: durationSec,
+        activityType,
+        timestamp: Date.now(),
+        synced: false
+      });
+
+      // Add to sync queue
+      await db.syncQueue.add({
+        type: 'run',
+        data: { runId, points, distance, durationSec, activityType, updatedTiles },
+        timestamp: Date.now()
       });
 
       toast({
-        title: 'Run Saved!',
+        title: 'Run Saved Locally!',
         description: `${distance.toFixed(2)}km in ${formatTime(elapsedTime)}`,
       });
 
       // Show territory conquest notification
-      if (response.updatedTiles) {
-        const conqueredTiles = response.updatedTiles.filter((tile: any) => tile.flipped);
-        if (conqueredTiles.length > 0) {
-          toast({
-            title: 'Territory Conquered! 🗺️',
-            description: `You claimed ${conqueredTiles.length} new tile${conqueredTiles.length > 1 ? 's' : ''}!`,
-          });
-        }
+      const conqueredTiles = updatedTiles.filter(tile => tile.flipped);
+      if (conqueredTiles.length > 0) {
+        toast({
+          title: 'Territory Conquered! 🗺️',
+          description: `You claimed ${conqueredTiles.length} new tile${conqueredTiles.length > 1 ? 's' : ''}!`,
+        });
       }
 
       // Navigate back to home
       navigate('/');
     } catch (error) {
-      console.error('Failed to save run:', error);
+      console.error('Failed to save run locally:', error);
       toast({
         title: 'Failed to Save',
         description: 'Could not save your run. Please try again.',
@@ -460,31 +502,8 @@ const ActiveRun = () => {
 
   // Handle territory click on map
   const handleTerritoryClick = async (territory: any) => {
-    try {
-      // Fetch detailed territory info with user comparison
-      const response = await api.post('/territories/context', {
-        lat: currentPosition?.lat || 0,
-        lng: currentPosition?.lng || 0,
-      });
-
-      // Find the clicked territory in the response
-      const territoryInfo = response.territories?.find(
-        (t: any) => t.tile_id === territory.tile_id
-      );
-
-      if (territoryInfo) {
-        setTerritoryDetails({
-          ...territoryInfo,
-          user_best_time: response.personalBest?.durationSec || null,
-          user_best_distance: response.personalBest?.distanceKm || null,
-        });
-      } else {
-        setTerritoryDetails(territory);
-      }
-    } catch (error) {
-      console.error('Failed to fetch territory details:', error);
-      setTerritoryDetails(territory);
-    }
+    // For offline, just show basic territory info
+    setTerritoryDetails(territory);
   };
 
   // Distance milestone notifications
@@ -651,13 +670,48 @@ const ActiveRun = () => {
                     </p>
                   )}
                 </div>
+                
+                {/* Activity Type Selector */}
+                {gpsStatus === 'ready' && (
+                  <div className="mb-4 space-y-3">
+                    <p className="text-white/80 text-sm font-semibold">Select Activity:</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => setActivityType('run')}
+                        className={`p-4 rounded-xl border-2 transition-all ${
+                          activityType === 'run'
+                            ? 'bg-cyan-500/20 border-cyan-400 shadow-lg shadow-cyan-500/20'
+                            : 'bg-white/5 border-white/20 hover:border-white/40'
+                        }`}
+                      >
+                        <div className="text-3xl mb-2">🏃</div>
+                        <div className="text-white font-semibold">Run/Walk</div>
+                        <div className="text-white/60 text-xs mt-1">2-20 km/h</div>
+                      </button>
+                      
+                      <button
+                        onClick={() => setActivityType('cycle')}
+                        className={`p-4 rounded-xl border-2 transition-all ${
+                          activityType === 'cycle'
+                            ? 'bg-cyan-500/20 border-cyan-400 shadow-lg shadow-cyan-500/20'
+                            : 'bg-white/5 border-white/20 hover:border-white/40'
+                        }`}
+                      >
+                        <div className="text-3xl mb-2">🚴</div>
+                        <div className="text-white font-semibold">Cycle</div>
+                        <div className="text-white/60 text-xs mt-1">10-40 km/h</div>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
                 <Button
                   onClick={handleStart}
                   className="w-full h-14 text-base font-bold bg-green-500 hover:bg-green-600 disabled:opacity-50"
                   disabled={gpsStatus !== 'ready' || !gpsAccuracy || gpsAccuracy > 50}
                 >
                   <Play className="w-5 h-5 mr-2" />
-                  {gpsStatus === 'ready' ? 'Start Run' : 'Waiting for GPS...'}
+                  {gpsStatus === 'ready' ? `Start ${activityType === 'run' ? 'Run' : 'Cycle'}` : 'Waiting for GPS...'}
                 </Button>
                 {gpsStatus === 'denied' || gpsStatus === 'timeout' ? (
                   <Button

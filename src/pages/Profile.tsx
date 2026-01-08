@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Camera, Edit2, Save, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { api } from '@/lib/api';
 import BottomNavigation from '@/components/BottomNavigation';
 
 const Profile = () => {
@@ -16,6 +18,7 @@ const Profile = () => {
   const { toast } = useToast();
   const [isEditing, setIsEditing] = useState(false);
   const [username, setUsername] = useState(user?.username || '');
+  const [activityStats, setActivityStats] = useState<{ run: number; cycle: number } | null>(null);
 
   const handleSave = () => {
     if (username.trim()) {
@@ -36,6 +39,26 @@ const Profile = () => {
       .toUpperCase()
       .slice(0, 2);
   };
+
+  // Fetch activity-specific stats
+  useEffect(() => {
+    const fetchActivityStats = async () => {
+      try {
+        const response = await api.get(`/territories?ownerId=${user?.id}`);
+        if (response.ok && response.territories) {
+          const runCount = response.territories.filter((t: any) => t.activity_type === 'run').length;
+          const cycleCount = response.territories.filter((t: any) => t.activity_type === 'cycle').length;
+          setActivityStats({ run: runCount, cycle: cycleCount });
+        }
+      } catch (error) {
+        console.error('Failed to fetch activity stats:', error);
+      }
+    };
+
+    if (user?.id) {
+      fetchActivityStats();
+    }
+  }, [user?.id]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -136,6 +159,25 @@ const Profile = () => {
               </p>
               <p className="text-sm text-muted-foreground">km Total Distance</p>
             </div>
+            
+            {/* Activity Type Breakdown */}
+            {activityStats && (
+              <>
+                <div className="bg-muted/30 rounded-xl p-4 text-center">
+                  <p className="text-3xl font-display font-bold text-cyan-400">
+                    {activityStats.run} 🏃
+                  </p>
+                  <p className="text-sm text-muted-foreground">Running Conquests</p>
+                </div>
+                <div className="bg-muted/30 rounded-xl p-4 text-center">
+                  <p className="text-3xl font-display font-bold text-purple-400">
+                    {activityStats.cycle} 🚴
+                  </p>
+                  <p className="text-sm text-muted-foreground">Cycling Conquests</p>
+                </div>
+              </>
+            )}
+            
             <div className="bg-muted/30 rounded-xl p-4 text-center">
               <p className="text-3xl font-display font-bold text-accent">
                 {user?.stats?.currentStreak || 0}
@@ -175,6 +217,27 @@ const Profile = () => {
               </span>
             </div>
           </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+        >
+          <Card>
+            <CardHeader>
+              <CardTitle>Privacy</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => navigate('/privacy-zones')}
+              >
+                Manage Privacy Zones
+              </Button>
+            </CardContent>
+          </Card>
         </motion.div>
       </main>
 

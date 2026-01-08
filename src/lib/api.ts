@@ -1,21 +1,63 @@
+import { db } from './db';
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
 function getToken() {
   return localStorage.getItem('auth_token');
 }
 
-export async function apiFetch(path: string, options: RequestInit = {}) {
-  const token = getToken();
-  const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const error = (body && body.error) || res.statusText;
-    throw new Error(error);
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
   }
-  return res.json();
+}
+
+export function isApiError(err: unknown): err is ApiError {
+  return err instanceof ApiError;
+}
+
+export function getApiErrorMessage(err: unknown, fallback: string) {
+  if (isApiError(err)) return err.message || fallback;
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string') {
+    return (err as any).message || fallback;
+  }
+  return fallback;
+}
+
+export async function apiFetch(path: string, options: RequestInit = {}) {
+  try {
+    const token = getToken();
+    const headers = new Headers(options.headers || {});
+    headers.set('Content-Type', 'application/json');
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+
+    const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+    const contentType = res.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+
+    const body = isJson ? await res.json().catch(() => undefined) : await res.text().catch(() => undefined);
+
+    if (!res.ok) {
+      const message =
+        (body && typeof body === 'object' && 'error' in body && typeof (body as any).error === 'string'
+          ? (body as any).error
+          : res.statusText) ||
+        'Request failed';
+      throw new ApiError(message, res.status, body);
+    }
+
+    return body;
+  } catch (err: any) {
+    // fetch() network errors are typically TypeError; normalize to ApiError for consistent UI
+    if (isApiError(err)) throw err;
+    throw new ApiError(err?.message || 'Network error', 0, undefined);
+  }
 }
 
 // Lightweight API helper to mirror axios-style calls used in pages
@@ -36,4 +78,34 @@ export function setToken(token: string | null) {
   } else {
     localStorage.setItem('auth_token', token);
   }
+}
+
+// Sync pending runs to server
+export async function syncRuns(): Promise<{ synced: number; errors: number }> {
+  const pendingRuns = await db.syncQueue.where('type').equals('run').sortBy('timestamp');
+  if (pendingRuns.length === 0) return { synced: 0, errors: 0 };
+
+  let synced = 0;
+  let errors = 0;
+
+  // Group by user or send all at once
+  const runsData = pendingRuns.map(item => item.data);
+
+  try {
+    await api.post('/runs/sync', { runs: runsData });
+    // On success, mark as synced and remove from queue
+    for (const item of pendingRuns) {
+      await db.syncQueue.delete(item.id!);
+      // Also mark run as synced
+      if (item.data.runId) {
+        await db.runs.update(item.data.runId, { synced: true });
+      }
+    }
+    synced = pendingRuns.length;
+  } catch (err) {
+    console.error('Sync failed:', err);
+    errors = pendingRuns.length;
+  }
+
+  return { synced, errors };
 }

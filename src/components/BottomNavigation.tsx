@@ -18,7 +18,7 @@ const BottomNavigation = () => {
       id: 'social',
       path: '/social',
       icon: Rss,
-      label: 'Feed',
+      label: 'Social',
       color: 'text-muted-foreground',
     },
     {

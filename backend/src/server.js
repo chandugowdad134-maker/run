@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { createClient } from 'redis';
 import { pool, verifyDatabaseConnection, ensureSchema } from './db.js';
 import authRouter from './authRoutes.js';
 import runRouter from './runRoutes.js';
@@ -17,6 +18,19 @@ import statsRouter from './statsRoutes.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Redis client
+const redisClient = createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379'
+});
+
+redisClient.on('error', (err) => {
+  // Don't log Redis errors during startup - just silently fail
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('Redis not available:', err.message);
+  }
+});
+redisClient.on('connect', () => console.log('Connected to Redis'));
 
 app.use(cors());
 app.use(express.json());
@@ -61,6 +75,14 @@ async function start() {
     await ensureSchema();
     console.log('Connected to database');
 
+    // Try to connect to Redis, but don't fail if it's not available
+    try {
+      await redisClient.connect();
+      console.log('Connected to Redis');
+    } catch (redisError) {
+      console.warn('Redis not available, continuing without caching:', redisError.message);
+    }
+
     app.listen(PORT, () => {
       console.log(`API ready on http://localhost:${PORT}`);
     });
@@ -71,3 +93,6 @@ async function start() {
 }
 
 start();
+
+// Export for use in routes
+export { redisClient };

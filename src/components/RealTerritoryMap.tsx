@@ -3,8 +3,11 @@ import { MapContainer, TileLayer, Polygon, Polyline, useMap, Circle, Marker } fr
 import { LatLngExpression, Icon, DivIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { apiFetch } from '@/lib/api';
-import { Crosshair, Plus, Minus } from 'lucide-react';
+import { Crosshair, Plus, Minus, Users } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { Switch } from '@/components/ui/switch';
+import { db } from '@/lib/db';
+import { polygonFromTile } from '@/lib/territory';
 
 type Territory = {
   tile_id: string;
@@ -14,6 +17,17 @@ type Territory = {
     type: string;
     coordinates: number[][][];
   };
+  team_id?: number;
+  activity_type?: 'run' | 'cycle';
+};
+
+type TeamTerritory = {
+  team_id: number;
+  team_name: string;
+  team_color: string;
+  territories: Territory[];
+  total_strength: number;
+  tile_count: number;
 };
 
 type Run = {
@@ -110,9 +124,53 @@ function LocationButton({ onLocate }: { onLocate: () => void }) {
   );
 }
 
-type MapFilter = 'current' | 'mine' | 'friends' | 'global';
+// Team toggle component
+function TeamToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (enabled: boolean) => void }) {
+  return (
+    <div className="absolute bottom-20 right-2 z-[800] bg-white rounded-lg shadow-lg p-3 transition-all border border-gray-200">
+      <div className="flex items-center gap-2">
+        <Users className="w-4 h-4 text-gray-700" />
+        <span className="text-sm font-medium text-gray-700">Team View</span>
+        <Switch checked={enabled} onCheckedChange={onToggle} />
+      </div>
+    </div>
+  );
+}
 
-const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine' }: { 
+function CyclingOnlyToggle({ enabled, onToggle, visible }: { enabled: boolean; onToggle: (enabled: boolean) => void; visible: boolean }) {
+  if (!visible) return null;
+
+  return (
+    <div className="absolute bottom-32 right-2 z-[800] bg-white rounded-lg shadow-lg p-3 transition-all border border-gray-200">
+      <div className="flex items-center gap-2">
+        <span className="text-sm">🚴</span>
+        <span className="text-sm font-medium text-gray-700">Cycling Only</span>
+        <Switch checked={enabled} onCheckedChange={onToggle} />
+      </div>
+    </div>
+  );
+}
+
+type MapFilter = 'mine' | 'friends' | 'present';
+
+type TerritoryInfo = {
+  tile_id: string;
+  owner_id: number;
+  owner_name: string;
+  strength: number;
+  last_claimed: string;
+  distance_km?: number;
+  duration_sec?: number;
+  history: Array<{
+    from_owner: number;
+    from_owner_name: string;
+    to_owner: number;
+    to_owner_name: string;
+    changed_at: string;
+  }>;
+};
+
+const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'present' }: { 
   center?: [number, number]; 
   zoom?: number;
   showRuns?: boolean;
@@ -128,26 +186,96 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
   const [initialCenter, setInitialCenter] = useState<[number, number]>(center || [37.7749, -122.4194]);
   const [friendIds, setFriendIds] = useState<Set<number>>(new Set());
   const [teamMemberIds, setTeamMemberIds] = useState<Set<number>>(new Set());
+  const [teamViewEnabled, setTeamViewEnabled] = useState(false);
+  const [teamTerritories, setTeamTerritories] = useState<TeamTerritory[]>([]);
+  const [individualTerritories, setIndividualTerritories] = useState<Territory[]>([]);
+  const [myTeamId, setMyTeamId] = useState<number | null>(null);
+  const [selectedTerritory, setSelectedTerritory] = useState<TerritoryInfo | null>(null);
+  const [showTerritoryPopup, setShowTerritoryPopup] = useState(false);
+  const [cyclingOnly, setCyclingOnly] = useState(false);
+  const [mineHistoryTerritories, setMineHistoryTerritories] = useState<Territory[] | null>(null);
+
+  useEffect(() => {
+    if (filter !== 'mine' && cyclingOnly) {
+      setCyclingOnly(false);
+    }
+  }, [filter, cyclingOnly]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    if (filter !== 'mine' || !user) {
+      setMineHistoryTerritories(null);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    (async () => {
+      try {
+        const activityParam = cyclingOnly ? '&activityType=cycle' : '';
+        // Use fields=lite for smaller payload (we only need tile_id, owner_id, activity_type for rendering)
+        const res = await apiFetch(`/territories/mine-history?limit=1000&fields=lite${activityParam}`);
+        if (!mounted) return;
+        setMineHistoryTerritories(res.territories || []);
+        // Future: handle pagination using res.nextCursor if res.hasMore is true
+      } catch (err) {
+        if (!mounted) return;
+        // Fallback: Mine filter will use current-owned tiles only.
+        setMineHistoryTerritories([]);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [filter, user, cyclingOnly]);
 
   // Get user location on mount
   useEffect(() => {
-    if (!center && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          const location: [number, number] = [latitude, longitude];
-          setUserLocation(location);
-          setInitialCenter(location);
-        },
-        (error) => {
-          console.log('Location access denied or unavailable, using default location');
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 5000,
-          maximumAge: 0,
+    if (!center) {
+      // Try to use cached location from sessionStorage first for instant display
+      const cachedLocation = sessionStorage.getItem('last_location');
+      if (cachedLocation) {
+        try {
+          const { lat, lng, timestamp } = JSON.parse(cachedLocation);
+          // Use cached location if less than 5 minutes old
+          if (Date.now() - timestamp < 5 * 60 * 1000) {
+            const location: [number, number] = [lat, lng];
+            setUserLocation(location);
+            setInitialCenter(location);
+            console.log('Using cached location');
+          }
+        } catch (e) {
+          console.log('Invalid cached location');
         }
-      );
+      }
+      
+      // Still request fresh location in background
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude } = position.coords;
+            const location: [number, number] = [latitude, longitude];
+            setUserLocation(location);
+            setInitialCenter(location);
+            // Update cache
+            sessionStorage.setItem('last_location', JSON.stringify({
+              lat: latitude,
+              lng: longitude,
+              timestamp: Date.now()
+            }));
+          },
+          (error) => {
+            console.log('Location access denied or unavailable, using cached/default location');
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 5000,
+            maximumAge: 0,
+          }
+        );
+      }
     } else if (center) {
       setInitialCenter(center);
     }
@@ -157,22 +285,63 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
     let mounted = true;
     (async () => {
       try {
+        // Load cached territories first
+        const cachedTerritories = await db.territories.toArray();
+        const now = Date.now();
+        const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+        const validCache = cachedTerritories.filter(t => (now - t.lastUpdated) < CACHE_TTL);
+        
+        if (validCache.length > 0) {
+          const territoriesFromCache = validCache.map(t => ({
+            tile_id: t.tileId,
+            owner_id: parseInt(t.ownerId),
+            strength: t.strength,
+            geojson: t.geometry || polygonFromTile(t.tileId)
+          }));
+          setTerritories(territoriesFromCache);
+        }
+
+        // Then fetch fresh data in background
         console.log('Fetching territories, runs, friends, and teams...');
-        const [terrData, runData, friendsData, teamsData] = await Promise.all([
+        const [terrData, teamTerrData, runData, friendsData, teamsData] = await Promise.all([
           apiFetch('/territories?limit=500'),
+          apiFetch('/territories/teams?limit=500').catch(err => {
+            console.warn('Team territories not available:', err);
+            return { teams: [], individual: [] };
+          }),
           showRuns ? apiFetch('/runs?limit=100') : Promise.resolve({ runs: [] }),
           apiFetch('/friends').catch(() => ({ friends: [] })),
           apiFetch('/teams/my-teams').catch(() => ({ teams: [] }))
         ]);
         
         console.log('Territories:', terrData.territories?.length || 0);
+        console.log('Team Territories:', teamTerrData.teams?.length || 0);
         console.log('Runs:', runData.runs?.length || 0);
         console.log('Friends:', friendsData.friends?.length || 0);
         console.log('Teams:', teamsData.teams?.length || 0);
         
         if (!mounted) return;
         setTerritories(terrData.territories || []);
+        setTeamTerritories(teamTerrData.teams || []);
+        setIndividualTerritories(teamTerrData.individual || []);
         setRuns(runData.runs || []);
+        
+        // Cache territories
+        await db.territories.clear();
+        for (const terr of terrData.territories || []) {
+          await db.territories.put({
+            tileId: terr.tile_id,
+            ownerId: terr.owner_id.toString(),
+            strength: terr.strength,
+            geometry: terr.geojson,
+            lastUpdated: Date.now()
+          });
+        }
+        
+        // Get user's team ID
+        if (teamsData.teams?.length > 0) {
+          setMyTeamId(teamsData.teams[0].id);
+        }
         
         // Extract friend IDs (only accepted friends)
         const acceptedFriendIds = new Set(
@@ -222,7 +391,7 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
       };
     }
     
-    // � Friends' Territories
+    // 🟢 Friends' Territories
     if (friendIds.has(ownerId)) {
       return {
         fillColor: '#43A047', // Green
@@ -251,30 +420,51 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
     };
   };
 
+  // Color scheme for team territories
+  const getTeamTerritoryColors = (teamId: number, teamColor: string) => {
+    // Your team - use custom team color with higher opacity
+    if (myTeamId && teamId === myTeamId) {
+      return {
+        fillColor: teamColor,
+        color: teamColor,
+        fillOpacity: 0.45,
+        weight: 2.5,
+      };
+    }
+    
+    // Other teams - use their team color but more transparent
+    return {
+      fillColor: teamColor,
+      color: teamColor,
+      fillOpacity: 0.30,
+      weight: 2,
+    };
+  };
+
   // Filter territories based on active filter
   const getFilteredTerritories = () => {
     if (!user) return territories;
     
     switch (filter) {
-      case 'current':
-        // Only show current run (handled separately in ActiveRun)
-        return [];
       case 'mine':
-        // Only show user's own territories
-        return territories.filter(t => t.owner_id === user.id);
+        // Phase 2: show territories the user has ever owned/claimed.
+        // Fallback: if historical list is not loaded, show currently owned.
+        return (mineHistoryTerritories ?? territories).filter((t) => {
+          const isMineHistoryKnown = mineHistoryTerritories !== null;
+          if (!isMineHistoryKnown) {
+            if (t.owner_id !== user.id) return false;
+          }
+          if (cyclingOnly) return t.activity_type === 'cycle';
+          return true;
+        });
       case 'friends':
-        // Show friends and team members' territories
+        // Show only friends and team members' territories
         return territories.filter(t => 
           friendIds.has(t.owner_id) || teamMemberIds.has(t.owner_id)
         );
-      case 'global':
-        // Show all other players (not user, not friends, not team)
-        return territories.filter(t => 
-          t.owner_id !== user.id && 
-          !friendIds.has(t.owner_id) && 
-          !teamMemberIds.has(t.owner_id)
-        );
+      case 'present':
       default:
+        // Show all territories (current ownership map)
         return territories;
     }
   };
@@ -284,21 +474,17 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
     if (!user) return runs;
     
     switch (filter) {
-      case 'current':
-        return [];
       case 'mine':
+        // Show all user's runs
         return runs.filter(r => r.user_id === user.id);
       case 'friends':
+        // Show only friends and team members' runs
         return runs.filter(r => 
           friendIds.has(r.user_id) || teamMemberIds.has(r.user_id)
         );
-      case 'global':
-        return runs.filter(r => 
-          r.user_id !== user.id && 
-          !friendIds.has(r.user_id) && 
-          !teamMemberIds.has(r.user_id)
-        );
+      case 'present':
       default:
+        // Show all runs
         return runs;
     }
   };
@@ -360,6 +546,32 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
     );
   };
 
+  // Handle territory click - fetch and show info
+  const handleTerritoryClick = async (tileId: string) => {
+    try {
+      const response = await apiFetch(`/territories/${tileId}/info`);
+      setSelectedTerritory(response.territory);
+      setShowTerritoryPopup(true);
+    } catch (error) {
+      console.error('Failed to load territory info:', error);
+    }
+  };
+
+  const formatDuration = (seconds?: number) => {
+    if (!seconds) return 'N/A';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const formatTimeDiff = (date1: string, date2: string) => {
+    const diff = new Date(date1).getTime() - new Date(date2).getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    if (days > 0) return `${days}d ${hours}h`;
+    return `${hours}h`;
+  };
+
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gray-900 rounded-2xl border-2 border-gray-700">
@@ -384,8 +596,88 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
 
   return (
     <div className="w-full h-full rounded-2xl overflow-hidden relative">
+      {/* Territory Info Popup */}
+      {showTerritoryPopup && selectedTerritory && (
+        <div className="absolute inset-0 z-[1000] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+             onClick={() => setShowTerritoryPopup(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4"
+               onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Territory Info</h3>
+              <button 
+                onClick={() => setShowTerritoryPopup(false)}
+                className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="space-y-3">
+              <div className="flex items-center justify-between py-2 border-b">
+                <span className="text-gray-600 font-medium">Owner</span>
+                <span className="text-gray-900 font-bold">{selectedTerritory.owner_name}</span>
+              </div>
+              
+              <div className="flex items-center justify-between py-2 border-b">
+                <span className="text-gray-600 font-medium">Strength</span>
+                <span className="text-gray-900 font-bold">{selectedTerritory.strength}</span>
+              </div>
+              
+              {selectedTerritory.distance_km && (
+                <div className="flex items-center justify-between py-2 border-b">
+                  <span className="text-gray-600 font-medium">Distance</span>
+                  <span className="text-gray-900 font-bold">{selectedTerritory.distance_km.toFixed(2)} km</span>
+                </div>
+              )}
+              
+              {selectedTerritory.duration_sec && (
+                <div className="flex items-center justify-between py-2 border-b">
+                  <span className="text-gray-600 font-medium">Time</span>
+                  <span className="text-gray-900 font-bold">{formatDuration(selectedTerritory.duration_sec)}</span>
+                </div>
+              )}
+              
+              <div className="flex items-center justify-between py-2 border-b">
+                <span className="text-gray-600 font-medium">Last Claimed</span>
+                <span className="text-gray-900 text-sm">
+                  {new Date(selectedTerritory.last_claimed).toLocaleDateString()}
+                </span>
+              </div>
+              
+              {selectedTerritory.history && selectedTerritory.history.length > 0 && (
+                <div className="mt-4">
+                  <h4 className="font-semibold text-gray-900 mb-2">History</h4>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {selectedTerritory.history.map((event, idx) => (
+                      <div key={idx} className="bg-gray-50 rounded-lg p-3 text-sm">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-gray-700">
+                            <span className="font-medium">{event.to_owner_name}</span> conquered from{' '}
+                            <span className="font-medium">{event.from_owner_name}</span>
+                          </span>
+                        </div>
+                        <div className="text-gray-500 text-xs">
+                          {new Date(event.changed_at).toLocaleString()}
+                          {idx > 0 && (
+                            <span className="ml-2">
+                              ({formatTimeDiff(event.changed_at, selectedTerritory.history[idx - 1].changed_at)} later)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <ZoomButtons onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} />
       <LocationButton onLocate={handleLocateUser} />
+      <CyclingOnlyToggle enabled={cyclingOnly} onToggle={setCyclingOnly} visible={filter === 'mine'} />
+      <TeamToggle enabled={teamViewEnabled} onToggle={setTeamViewEnabled} />
       
       <MapContainer
         center={initialCenter}
@@ -403,23 +695,96 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'mine'
           maxZoom={19}
         />
 
-        {/* Territories (Polygons) - Filtered */}
-        {getFilteredTerritories().map((territory) => {
-          const coords = territory.geojson?.coordinates?.[0] || [];
-          if (coords.length === 0) return null;
-          
-          // Convert from [lng, lat] to [lat, lng] for Leaflet
-          const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
-          const colors = getTerritoryColors(territory.owner_id);
+        {/* Territories - Team View or Individual View */}
+        {teamViewEnabled ? (
+          // Team View: Show territories grouped by teams
+          <>
+            {teamTerritories.map((team) => 
+              team.territories.map((territory) => {
+                const coords = territory.geojson?.coordinates?.[0] || [];
+                if (coords.length === 0) return null;
+                
+                const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
+                const colors = getTeamTerritoryColors(team.team_id, team.team_color);
 
-          return (
-            <Polygon
-              key={territory.tile_id}
-              positions={positions}
-              pathOptions={colors}
-            />
-          );
-        })}
+                return (
+                  <Polygon
+                    key={territory.tile_id}
+                    positions={positions}
+                    pathOptions={colors}
+                    eventHandlers={{
+                      click: () => handleTerritoryClick(territory.tile_id)
+                    }}
+                  />
+                );
+              })
+            )}
+            {/* Individual territories (no team) */}
+            {individualTerritories.map((territory) => {
+              const coords = territory.geojson?.coordinates?.[0] || [];
+              if (coords.length === 0) return null;
+              
+              const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
+              const colors = getTerritoryColors(territory.owner_id);
+
+              return (
+                <Polygon
+                  key={territory.tile_id}
+                  positions={positions}
+                  pathOptions={colors}
+                  eventHandlers={{
+                    click: () => handleTerritoryClick(territory.tile_id)
+                  }}
+                />
+              );
+            })}
+          </>
+        ) : (
+          // Individual View: Show territories with personal colors
+          getFilteredTerritories().map((territory) => {
+            const coords = territory.geojson?.coordinates?.[0] || [];
+            if (coords.length === 0) return null;
+            
+            const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
+            const colors = (() => {
+              const base = getTerritoryColors(territory.owner_id);
+              if (filter === 'mine' && territory.owner_id === user?.id && territory.activity_type === 'cycle') {
+                return {
+                  ...base,
+                  fillColor: '#8E24AA',
+                  color: '#6A1B9A',
+                  fillOpacity: 0.45,
+                  weight: 2.5,
+                };
+              }
+              return base;
+            })();
+
+            return (
+              <>
+                <Polygon
+                  key={territory.tile_id}
+                  positions={positions}
+                  pathOptions={colors}
+                  eventHandlers={{
+                    click: () => handleTerritoryClick(territory.tile_id)
+                  }}
+                />
+                {/* Activity Type Badge */}
+                {territory.activity_type === 'cycle' && territory.owner_id === user?.id && (
+                  <Marker
+                    position={[positions[0][0], positions[0][1]]}
+                    icon={new DivIcon({
+                      html: '<div style="background: white; border-radius: 50%; padding: 2px 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">🚴</div>',
+                      className: '',
+                      iconSize: [24, 24],
+                    })}
+                  />
+                )}
+              </>
+            );
+          })
+        )}
 
         {/* Running Routes (Polylines) - Filtered */}
         {showRuns && getFilteredRuns().map((run) => {

@@ -7,12 +7,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import RealTerritoryMap from '@/components/RealTerritoryMap';
 import BottomNavigation from '@/components/BottomNavigation';
 
-type MapFilter = 'current' | 'mine' | 'friends' | 'global';
+type MapFilter = 'mine' | 'friends' | 'present';
 
 const Home = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [activeFilter, setActiveFilter] = useState<MapFilter>('mine');
+  const [activeFilter, setActiveFilter] = useState<MapFilter>('present');
 
   const handleLogout = () => {
     logout();
@@ -20,10 +20,9 @@ const Home = () => {
   };
 
   const filterOptions: { id: MapFilter; label: string; color: string }[] = [
-    { id: 'current', label: 'Current Run', color: 'bg-orange-500/20 text-orange-400 border-orange-500/50' },
     { id: 'mine', label: 'Mine', color: 'bg-blue-500/20 text-blue-400 border-blue-500/50' },
     { id: 'friends', label: 'Friends', color: 'bg-green-500/20 text-green-400 border-green-500/50' },
-    { id: 'global', label: 'Global', color: 'bg-red-500/20 text-red-400 border-red-500/50' },
+    { id: 'present', label: 'Present', color: 'bg-purple-500/20 text-purple-400 border-purple-500/50' },
   ];
 
   return (

@@ -203,6 +203,7 @@ export async function ensureSchema() {
       distance_in_tile NUMERIC,
       time_in_tile INTEGER
     );
+    ALTER TABLE territory_claims ADD COLUMN IF NOT EXISTS activity_type TEXT DEFAULT 'run';
   `);
 
   // Notifications
@@ -360,6 +361,10 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id);
     CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_territory_history_tile ON territory_history(tile_id);
+    CREATE INDEX IF NOT EXISTS idx_territory_history_to_owner ON territory_history(to_owner);
+    CREATE INDEX IF NOT EXISTS idx_territory_history_to_owner_tile ON territory_history(to_owner, tile_id);
+    CREATE INDEX IF NOT EXISTS idx_territory_claims_user ON territory_claims(user_id);
+    CREATE INDEX IF NOT EXISTS idx_territory_claims_user_tile ON territory_claims(user_id, tile_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id) WHERE read = false;
     CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(user_id, status);
     CREATE INDEX IF NOT EXISTS idx_teams_invitation_code ON teams(invitation_code) WHERE invitation_code IS NOT NULL;
