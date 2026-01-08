@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Background -->
+  <circle cx="100" cy="100" r="100" fill="#0f172a"/>
+  
+  <!-- Map grid (territory) -->
+  <g stroke="#3b82f6" stroke-width="2" fill="none" opacity="0.3">
+    <line x1="40" y1="80" x2="160" y2="80"/>
+    <line x1="40" y1="100" x2="160" y2="100"/>
+    <line x1="40" y1="120" x2="160" y2="120"/>
+    <line x1="80" y1="60" x2="80" y2="140"/>
+    <line x1="120" y1="60" x2="120" y2="140"/>
+  </g>
+  
+  <!-- Running figure (runner) -->
+  <g fill="#22d3ee">
+    <!-- Head -->
+    <circle cx="100" cy="50" r="8"/>
+    
+    <!-- Body -->
+    <line x1="100" y1="58" x2="100" y2="80" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+    
+    <!-- Left arm (running pose) -->
+    <line x1="100" y1="62" x2="80" y2="50" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+    
+    <!-- Right arm (running pose) -->
+    <line x1="100" y1="62" x2="120" y2="75" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+    
+    <!-- Left leg (forward) -->
+    <line x1="100" y1="80" x2="90" y2="120" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+    
+    <!-- Right leg (back) -->
+    <line x1="100" y1="80" x2="110" y2="110" stroke="#22d3ee" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  
+  <!-- Speed lines (motion) -->
+  <g stroke="#10b981" stroke-width="2" opacity="0.6" stroke-linecap="round">
+    <line x1="60" y1="95" x2="70" y2="95"/>
+    <line x1="55" y1="110" x2="70" y2="110"/>
+    <line x1="65" y1="125" x2="75" y2="125"/>
+  </g>
+  
+  <!-- Territory claim indicator (small flag/pin) -->
+  <circle cx="145" cy="70" r="6" fill="#f59e0b" opacity="0.8"/>
+  <circle cx="145" cy="70" r="3" fill="#fff"/>
+</svg>
