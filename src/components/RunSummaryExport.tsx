@@ -1,9 +1,7 @@
-import { useRef, useEffect, useState } from 'react';
-import { Share2, Download, Copy, X, MapPin, Clock, Route, Zap, Mountain, Flag } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Share2, Download, Copy, X, Clock, Zap, Map, Route, Flag, ChevronLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { MapContainer, TileLayer, Polyline, Polygon } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
 import html2canvas from 'html2canvas';
 
 interface GPSPoint {
@@ -11,6 +9,8 @@ interface GPSPoint {
   lng: number;
   timestamp: number;
 }
+
+type ExportType = 'route' | 'territory' | null;
 
 interface RunSummaryExportProps {
   distance: number;
@@ -21,8 +21,10 @@ interface RunSummaryExportProps {
   elevation?: number;
   activityType: 'run' | 'cycle';
   gpsPoints?: GPSPoint[];
-  capturedTerritory?: any; // GeoJSON polygon of captured territory
+  capturedTerritory?: any;
   onClose: () => void;
+  // New prop to skip type selection (for direct access from history)
+  initialExportType?: ExportType;
 }
 
 const RunSummaryExport = ({
@@ -36,14 +38,16 @@ const RunSummaryExport = ({
   gpsPoints = [],
   capturedTerritory,
   onClose,
+  initialExportType = null,
 }: RunSummaryExportProps) => {
   const { toast } = useToast();
   const exportRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportType, setExportType] = useState<ExportType>(initialExportType);
 
-  // Calculate map bounds from GPS points
-  const getMapBounds = () => {
-    if (gpsPoints.length === 0) return null;
+  // Calculate bounds and scaling for SVG route
+  const getRouteData = () => {
+    if (gpsPoints.length < 2) return null;
     
     let minLat = Infinity, maxLat = -Infinity;
     let minLng = Infinity, maxLng = -Infinity;
@@ -55,34 +59,103 @@ const RunSummaryExport = ({
       maxLng = Math.max(maxLng, point.lng);
     });
     
-    // Add padding
-    const latPadding = (maxLat - minLat) * 0.15;
-    const lngPadding = (maxLng - minLng) * 0.15;
+    const latRange = maxLat - minLat || 0.001;
+    const lngRange = maxLng - minLng || 0.001;
+    const padding = 0.15;
     
-    return {
-      center: [(minLat + maxLat) / 2, (minLng + maxLng) / 2] as [number, number],
-      bounds: [
-        [minLat - latPadding, minLng - lngPadding],
-        [maxLat + latPadding, maxLng + lngPadding]
-      ] as [[number, number], [number, number]]
-    };
+    minLat -= latRange * padding;
+    maxLat += latRange * padding;
+    minLng -= lngRange * padding;
+    maxLng += lngRange * padding;
+    
+    return { minLat, maxLat, minLng, maxLng, latRange: maxLat - minLat, lngRange: maxLng - minLng };
   };
 
-  const mapData = getMapBounds();
-  const routeCoords = gpsPoints.map(p => [p.lat, p.lng] as [number, number]);
+  const routeData = getRouteData();
+
+  // Convert GPS coords to SVG coordinates
+  const toSvgCoords = (lat: number, lng: number, width: number, height: number) => {
+    if (!routeData) return { x: 0, y: 0 };
+    const x = ((lng - routeData.minLng) / routeData.lngRange) * width;
+    const y = height - ((lat - routeData.minLat) / routeData.latRange) * height;
+    return { x, y };
+  };
+
+  // Generate SVG path string
+  const generatePathString = (width: number, height: number) => {
+    if (gpsPoints.length < 2) return '';
+    
+    const points = gpsPoints.map(p => toSvgCoords(p.lat, p.lng, width, height));
+    let path = `M ${points[0].x} ${points[0].y}`;
+    
+    for (let i = 1; i < points.length; i++) {
+      path += ` L ${points[i].x} ${points[i].y}`;
+    }
+    
+    return path;
+  };
+
+  // Generate closed territory polygon path (buffer around route)
+  const generateTerritoryPath = (width: number, height: number, bufferPx: number = 25) => {
+    if (gpsPoints.length < 2) return '';
+    
+    const points = gpsPoints.map(p => toSvgCoords(p.lat, p.lng, width, height));
+    
+    // Create offset polygons (simplified buffer)
+    const leftPoints: { x: number; y: number }[] = [];
+    const rightPoints: { x: number; y: number }[] = [];
+    
+    for (let i = 0; i < points.length; i++) {
+      let angle: number;
+      if (i === 0) {
+        angle = Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x);
+      } else if (i === points.length - 1) {
+        angle = Math.atan2(points[i].y - points[i - 1].y, points[i].x - points[i - 1].x);
+      } else {
+        const angle1 = Math.atan2(points[i].y - points[i - 1].y, points[i].x - points[i - 1].x);
+        const angle2 = Math.atan2(points[i + 1].y - points[i].y, points[i + 1].x - points[i].x);
+        angle = (angle1 + angle2) / 2;
+      }
+      
+      const perpAngle = angle + Math.PI / 2;
+      leftPoints.push({
+        x: points[i].x + Math.cos(perpAngle) * bufferPx,
+        y: points[i].y + Math.sin(perpAngle) * bufferPx,
+      });
+      rightPoints.push({
+        x: points[i].x - Math.cos(perpAngle) * bufferPx,
+        y: points[i].y - Math.sin(perpAngle) * bufferPx,
+      });
+    }
+    
+    // Create closed polygon path
+    let path = `M ${leftPoints[0].x} ${leftPoints[0].y}`;
+    for (let i = 1; i < leftPoints.length; i++) {
+      path += ` L ${leftPoints[i].x} ${leftPoints[i].y}`;
+    }
+    // Connect to right side and go back
+    for (let i = rightPoints.length - 1; i >= 0; i--) {
+      path += ` L ${rightPoints[i].x} ${rightPoints[i].y}`;
+    }
+    path += ' Z';
+    
+    return path;
+  };
 
   const generateSummaryText = () => {
     const emoji = activityType === 'run' ? '🏃' : '🚴';
-    return `${emoji} Territory ${activityType} completed!
-  
-⏱️ Time: ${time}
-📏 Distance: ${distance.toFixed(2)} km
-🗺️ Territory Claimed: ${territoriesClaimed}
-⚡ Avg Speed: ${speed.toFixed(1)} km/h
-⏱️ Pace: ${pace}/km
-  
-Conquering the world one run at a time! 🌍
-#TerritoryRunner #Running #Fitness`;
+    let text = `${emoji} ${activityType === 'run' ? 'Run' : 'Ride'} Complete!
+
+📏 ${distance.toFixed(2)} km
+⏱️ ${time}
+⚡ ${pace}/km`;
+
+    if (exportType === 'territory' && territoriesClaimed > 0) {
+      text += `\n🗺️ ${territoriesClaimed} tile${territoriesClaimed > 1 ? 's' : ''} conquered!`;
+    }
+
+    text += `\n\n#TerritoryRunner #Running #Fitness`;
+    return text;
   };
 
   const handleCopyToClipboard = async () => {
@@ -107,8 +180,8 @@ Conquering the world one run at a time! 🌍
     setIsExporting(true);
     try {
       const canvas = await html2canvas(exportRef.current, {
-        backgroundColor: '#0f172a',
-        scale: 2,
+        backgroundColor: null,
+        scale: 3,
         useCORS: true,
         allowTaint: true,
         logging: false,
@@ -116,12 +189,13 @@ Conquering the world one run at a time! 🌍
       
       const link = document.createElement('a');
       link.href = canvas.toDataURL('image/png');
-      link.download = `territory-run-${new Date().toISOString().slice(0,10)}.png`;
+      const suffix = exportType === 'territory' ? 'territory' : 'route';
+      link.download = `run-${distance.toFixed(1)}km-${suffix}-${new Date().toISOString().slice(0,10)}.png`;
       link.click();
       
       toast({
         title: 'Downloaded!',
-        description: 'Your run summary has been saved',
+        description: 'Your run image has been saved',
       });
     } catch (err) {
       console.error('Screenshot failed:', err);
@@ -145,233 +219,502 @@ Conquering the world one run at a time! 🌍
     if (navigator.share) {
       try {
         await navigator.share({
-          title: 'My Territory Run',
+          title: 'My Run',
           text: generateSummaryText(),
         });
       } catch (err) {
-        // User cancelled or share failed
+        // User cancelled
       }
     }
   };
 
-  // Format pace with /km suffix
-  const formatPace = (p: string) => {
-    if (p === '--:--') return p;
-    return `${p}/km`;
-  };
+  const svgWidth = 380;
+  const svgHeight = 320;
+  const pathString = generatePathString(svgWidth, svgHeight);
+  const territoryPath = generateTerritoryPath(svgWidth, svgHeight, 30);
+  const startPoint = gpsPoints.length > 0 ? toSvgCoords(gpsPoints[0].lat, gpsPoints[0].lng, svgWidth, svgHeight) : null;
+  const endPoint = gpsPoints.length > 1 ? toSvgCoords(gpsPoints[gpsPoints.length - 1].lat, gpsPoints[gpsPoints.length - 1].lng, svgWidth, svgHeight) : null;
 
-  return (
-    <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex items-center justify-center z-[9999] p-4 overflow-y-auto">
-      {/* Strava-style Export Card */}
-      <div 
-        ref={exportRef}
-        className="w-full max-w-md bg-gradient-to-b from-slate-900 to-slate-950 rounded-2xl overflow-hidden shadow-2xl relative"
-      >
-        {/* Close button - outside export area */}
+  // Export Type Selection Screen
+  if (exportType === null) {
+    return (
+      <div className="fixed inset-0 bg-black/95 backdrop-blur-xl flex items-center justify-center z-[9999] p-4">
         <button
           onClick={onClose}
-          className="absolute -top-2 -right-2 z-50 bg-white/10 hover:bg-white/20 rounded-full p-2 transition-colors backdrop-blur"
-          style={{ transform: 'translate(50%, -50%)' }}
+          className="absolute top-6 right-6 z-50 bg-white/10 hover:bg-white/20 rounded-full p-3 transition-all"
         >
           <X className="w-5 h-5 text-white" />
         </button>
 
-        {/* Map Section with Route */}
-        <div className="relative h-56 bg-slate-800">
-          {mapData && gpsPoints.length > 1 ? (
-            <MapContainer
-              center={mapData.center}
-              bounds={mapData.bounds}
-              className="h-full w-full"
-              zoomControl={false}
-              attributionControl={false}
-              dragging={false}
-              scrollWheelZoom={false}
-              doubleClickZoom={false}
-              touchZoom={false}
+        <div className="w-full max-w-md space-y-6">
+          {/* Header */}
+          <div className="text-center">
+            <div className="text-4xl mb-3">🎉</div>
+            <h2 className="text-2xl font-bold text-white mb-2">Great Run!</h2>
+            <p className="text-white/60">Choose how you want to share</p>
+          </div>
+
+          {/* Quick Stats */}
+          <div className="flex justify-center gap-6 py-4">
+            <div className="text-center">
+              <div className="text-3xl font-bold text-white">{distance.toFixed(2)}</div>
+              <div className="text-white/50 text-sm">km</div>
+            </div>
+            <div className="w-px bg-white/20" />
+            <div className="text-center">
+              <div className="text-3xl font-bold text-white">{time}</div>
+              <div className="text-white/50 text-sm">time</div>
+            </div>
+            {territoriesClaimed > 0 && (
+              <>
+                <div className="w-px bg-white/20" />
+                <div className="text-center">
+                  <div className="text-3xl font-bold text-cyan-400">{territoriesClaimed}</div>
+                  <div className="text-white/50 text-sm">tiles</div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Export Type Options */}
+          <div className="space-y-3">
+            <p className="text-white/40 text-xs uppercase tracking-wider text-center mb-4">
+              Choose Export Type
+            </p>
+
+            {/* Route Only Option */}
+            <button
+              onClick={() => setExportType('route')}
+              className="w-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-500/50 rounded-2xl p-5 transition-all text-left group"
             >
-              <TileLayer
-                url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              />
-              {/* Captured Territory */}
-              {capturedTerritory && (
-                <Polygon
-                  positions={capturedTerritory}
-                  pathOptions={{
-                    color: '#06b6d4',
-                    fillColor: '#06b6d4',
-                    fillOpacity: 0.3,
-                    weight: 2,
-                  }}
-                />
-              )}
-              {/* Run Route */}
-              <Polyline
-                positions={routeCoords}
-                pathOptions={{
-                  color: '#f97316',
-                  weight: 4,
-                  opacity: 1,
-                  lineCap: 'round',
-                  lineJoin: 'round',
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Route className="w-6 h-6 text-cyan-400" />
+                </div>
+                <div className="flex-1">
+                  <div className="text-white font-semibold mb-1 group-hover:text-cyan-400 transition-colors">
+                    Route Only
+                  </div>
+                  <div className="text-white/50 text-sm">
+                    Clean, minimal path with transparent background. Perfect for social media.
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            {/* Territory Option */}
+            <button
+              onClick={() => setExportType('territory')}
+              className="w-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-blue-500/50 rounded-2xl p-5 transition-all text-left group"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-blue-500/20 to-purple-500/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Map className="w-6 h-6 text-blue-400" />
+                </div>
+                <div className="flex-1">
+                  <div className="text-white font-semibold mb-1 group-hover:text-blue-400 transition-colors">
+                    Conquered Territory
+                  </div>
+                  <div className="text-white/50 text-sm">
+                    Show your route with filled territory area. Great for flexing your gains!
+                  </div>
+                  {territoriesClaimed > 0 && (
+                    <div className="mt-2 inline-flex items-center gap-1 text-cyan-400 text-xs bg-cyan-500/10 px-2 py-1 rounded">
+                      <Flag className="w-3 h-3" />
+                      <span>{territoriesClaimed} new tiles claimed</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </button>
+          </div>
+
+          {/* Skip to Stats */}
+          <div className="pt-4 border-t border-white/10">
+            <Button
+              onClick={onClose}
+              variant="ghost"
+              className="w-full text-white/50 hover:text-white hover:bg-white/5"
+            >
+              Skip for now
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Route Only Export View
+  if (exportType === 'route') {
+    return (
+      <div className="fixed inset-0 bg-black/95 backdrop-blur-xl flex items-center justify-center z-[9999] p-4 overflow-y-auto">
+        {/* Back button */}
+        <button
+          onClick={() => setExportType(null)}
+          className="absolute top-6 left-6 z-50 bg-white/10 hover:bg-white/20 rounded-full p-3 transition-all flex items-center gap-2"
+        >
+          <ChevronLeft className="w-5 h-5 text-white" />
+        </button>
+
+        {/* Close button */}
+        <button
+          onClick={onClose}
+          className="absolute top-6 right-6 z-50 bg-white/10 hover:bg-white/20 rounded-full p-3 transition-all"
+        >
+          <X className="w-5 h-5 text-white" />
+        </button>
+
+        <div className="w-full max-w-md flex flex-col items-center gap-6">
+          {/* Export Canvas - Route Only */}
+          <div 
+            ref={exportRef}
+            className="w-full aspect-square max-w-[400px] relative flex flex-col items-center justify-center p-6"
+            style={{ background: 'transparent' }}
+          >
+            <div className="flex-1 w-full flex items-center justify-center">
+              <svg 
+                width={svgWidth} 
+                height={svgHeight} 
+                viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+                className="overflow-visible"
+              >
+                <defs>
+                  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                    <feMerge>
+                      <feMergeNode in="coloredBlur"/>
+                      <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                  </filter>
+                  <linearGradient id="routeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#06b6d4" />
+                    <stop offset="50%" stopColor="#3b82f6" />
+                    <stop offset="100%" stopColor="#8b5cf6" />
+                  </linearGradient>
+                </defs>
+                
+                {pathString && (
+                  <>
+                    <path
+                      d={pathString}
+                      fill="none"
+                      stroke="rgba(59, 130, 246, 0.3)"
+                      strokeWidth="12"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      filter="url(#glow)"
+                    />
+                    <path
+                      d={pathString}
+                      fill="none"
+                      stroke="url(#routeGradient)"
+                      strokeWidth="4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </>
+                )}
+                
+                {startPoint && (
+                  <g>
+                    <circle cx={startPoint.x} cy={startPoint.y} r="14" fill="rgba(34, 197, 94, 0.2)" />
+                    <circle cx={startPoint.x} cy={startPoint.y} r="8" fill="#22c55e" />
+                    <circle cx={startPoint.x} cy={startPoint.y} r="4" fill="white" />
+                  </g>
+                )}
+                
+                {endPoint && (
+                  <g>
+                    <circle cx={endPoint.x} cy={endPoint.y} r="14" fill="rgba(249, 115, 22, 0.2)" />
+                    <circle cx={endPoint.x} cy={endPoint.y} r="8" fill="#f97316" />
+                    <circle cx={endPoint.x} cy={endPoint.y} r="4" fill="white" />
+                  </g>
+                )}
+              </svg>
+            </div>
+
+            {/* Stats Overlay */}
+            <div className="absolute bottom-4 left-4 right-4">
+              <div 
+                className="rounded-2xl p-4 backdrop-blur-md"
+                style={{ 
+                  background: 'rgba(15, 23, 42, 0.65)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)'
                 }}
-              />
-              {/* Start marker */}
-              {routeCoords.length > 0 && (
-                <Polyline
-                  positions={[routeCoords[0], routeCoords[0]]}
-                  pathOptions={{
-                    color: '#22c55e',
-                    weight: 12,
-                    opacity: 1,
-                  }}
-                />
-              )}
-              {/* End marker */}
-              {routeCoords.length > 1 && (
-                <Polyline
-                  positions={[routeCoords[routeCoords.length - 1], routeCoords[routeCoords.length - 1]]}
-                  pathOptions={{
-                    color: '#ef4444',
-                    weight: 12,
-                    opacity: 1,
-                  }}
-                />
-              )}
-            </MapContainer>
-          ) : (
-            <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
-              <div className="text-center">
-                <MapPin className="w-12 h-12 text-cyan-500/50 mx-auto mb-2" />
-                <p className="text-white/40 text-sm">Route Map</p>
-              </div>
-            </div>
-          )}
-          
-          {/* Overlay gradient */}
-          <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-slate-900 to-transparent pointer-events-none" />
-          
-          {/* Activity type badge */}
-          <div className="absolute top-3 left-3 bg-black/50 backdrop-blur-sm rounded-full px-3 py-1 flex items-center gap-2">
-            <span className="text-lg">{activityType === 'run' ? '🏃' : '🚴'}</span>
-            <span className="text-white/90 text-sm font-medium capitalize">{activityType}</span>
-          </div>
-        </div>
+              >
+                <div className="flex items-baseline justify-center gap-2 mb-3">
+                  <span className="text-4xl font-bold text-white tracking-tight">{distance.toFixed(2)}</span>
+                  <span className="text-lg text-white/50 font-medium">km</span>
+                </div>
+                
+                <div className="flex justify-center gap-6">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-white/40" />
+                    <span className="text-white/80 font-medium">{time}</span>
+                  </div>
+                  <div className="w-px h-4 bg-white/20" />
+                  <div className="flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-white/40" />
+                    <span className="text-white/80 font-medium">{pace}<span className="text-white/40 text-sm">/km</span></span>
+                  </div>
+                </div>
 
-        {/* Main Stats - Transparent Glass Cards */}
-        <div className="px-5 -mt-6 relative z-10">
-          {/* Primary Stats Row */}
-          <div className="grid grid-cols-2 gap-3">
-            {/* Distance - Hero stat */}
-            <div className="col-span-2 bg-white/5 backdrop-blur-xl rounded-2xl p-5 border border-white/10">
-              <div className="flex items-center gap-2 mb-1">
-                <Route className="w-4 h-4 text-cyan-400" />
-                <span className="text-xs text-white/50 uppercase tracking-wider font-medium">Distance</span>
-              </div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-5xl font-bold text-white tracking-tight">{distance.toFixed(2)}</span>
-                <span className="text-xl text-white/60 font-medium">km</span>
-              </div>
-            </div>
-
-            {/* Time */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 border border-white/10">
-              <div className="flex items-center gap-2 mb-1">
-                <Clock className="w-4 h-4 text-emerald-400" />
-                <span className="text-xs text-white/50 uppercase tracking-wider font-medium">Time</span>
-              </div>
-              <div className="text-2xl font-bold text-white font-mono tracking-tight">
-                {time}
-              </div>
-            </div>
-
-            {/* Pace */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-2xl p-4 border border-white/10">
-              <div className="flex items-center gap-2 mb-1">
-                <Zap className="w-4 h-4 text-yellow-400" />
-                <span className="text-xs text-white/50 uppercase tracking-wider font-medium">Pace</span>
-              </div>
-              <div className="text-2xl font-bold text-white font-mono tracking-tight">
-                {formatPace(pace)}
-              </div>
-            </div>
-          </div>
-
-          {/* Secondary Stats Row */}
-          <div className="grid grid-cols-3 gap-3 mt-3">
-            {/* Avg Speed */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-xl p-3 border border-white/10 text-center">
-              <div className="text-xs text-white/50 uppercase tracking-wider mb-1">Speed</div>
-              <div className="text-lg font-bold text-blue-400">{speed.toFixed(1)}</div>
-              <div className="text-xs text-white/40">km/h</div>
-            </div>
-
-            {/* Territory Claimed */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-xl p-3 border border-cyan-500/30 text-center">
-              <div className="text-xs text-white/50 uppercase tracking-wider mb-1">Territory</div>
-              <div className="text-lg font-bold text-cyan-400">{territoriesClaimed}</div>
-              <div className="text-xs text-white/40">tiles</div>
-            </div>
-
-            {/* Elevation or placeholder */}
-            <div className="bg-white/5 backdrop-blur-xl rounded-xl p-3 border border-white/10 text-center">
-              <div className="text-xs text-white/50 uppercase tracking-wider mb-1">
-                {elevation !== undefined ? 'Elev' : 'Calories'}
-              </div>
-              <div className="text-lg font-bold text-purple-400">
-                {elevation !== undefined ? `+${elevation.toFixed(0)}` : Math.round(distance * 60)}
-              </div>
-              <div className="text-xs text-white/40">
-                {elevation !== undefined ? 'm' : 'kcal'}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Achievement Banner */}
-        {territoriesClaimed > 0 && (
-          <div className="mx-5 mt-4 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 rounded-xl p-4 border border-cyan-500/30">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-cyan-500/30 rounded-full flex items-center justify-center">
-                <Flag className="w-5 h-5 text-cyan-400" />
-              </div>
-              <div>
-                <div className="text-white font-semibold">Territory Conquered!</div>
-                <div className="text-cyan-300/70 text-sm">
-                  {territoriesClaimed} new tile{territoriesClaimed > 1 ? 's' : ''} claimed
+                <div className="mt-3 pt-3 border-t border-white/5 text-center">
+                  <span className="text-white/25 text-xs tracking-wider">TERRITORY RUNNER</span>
                 </div>
               </div>
             </div>
-          </div>
-        )}
 
-        {/* App Branding */}
-        <div className="text-center py-4 mt-2">
-          <div className="text-white/30 text-xs">
-            🗺️ Territory Runner
+            <div className="absolute top-4 left-4">
+              <div 
+                className="rounded-full px-3 py-1.5 flex items-center gap-2"
+                style={{ 
+                  background: 'rgba(15, 23, 42, 0.5)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)'
+                }}
+              >
+                <span className="text-base">{activityType === 'run' ? '🏃' : '🚴'}</span>
+                <span className="text-white/70 text-xs font-medium uppercase tracking-wide">
+                  {activityType === 'run' ? 'Run' : 'Ride'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="w-full max-w-[400px] space-y-3">
+            <Button
+              onClick={handleDownloadScreenshot}
+              disabled={isExporting}
+              className="w-full bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-xl py-6 transition-all flex items-center justify-center gap-2 font-semibold text-base"
+            >
+              <Download className="w-5 h-5" />
+              {isExporting ? 'Creating Image...' : 'Download Image'}
+            </Button>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                onClick={handleShareToStrava}
+                className="bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl py-4 transition-all flex items-center justify-center gap-2 font-medium"
+              >
+                <Share2 className="w-4 h-4" />
+                Strava
+              </Button>
+              
+              <Button
+                onClick={handleCopyToClipboard}
+                className="bg-white/10 hover:bg-white/20 text-white border-0 rounded-xl py-4 transition-all flex items-center justify-center gap-2"
+              >
+                <Copy className="w-4 h-4" />
+                Copy
+              </Button>
+            </div>
+
+            {typeof navigator !== 'undefined' && navigator.share && (
+              <Button
+                onClick={handleNativeShare}
+                className="w-full bg-white/5 hover:bg-white/10 text-white/60 border-0 rounded-xl py-3 transition-all text-sm"
+              >
+                More sharing options...
+              </Button>
+            )}
+
+            <Button
+              onClick={onClose}
+              variant="outline"
+              className="w-full border-white/20 text-white hover:bg-white/10 rounded-xl py-5 transition-all font-medium mt-2"
+            >
+              Done
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Territory Export View
+  return (
+    <div className="fixed inset-0 bg-black/95 backdrop-blur-xl flex items-center justify-center z-[9999] p-4 overflow-y-auto">
+      {/* Back button */}
+      <button
+        onClick={() => setExportType(null)}
+        className="absolute top-6 left-6 z-50 bg-white/10 hover:bg-white/20 rounded-full p-3 transition-all flex items-center gap-2"
+      >
+        <ChevronLeft className="w-5 h-5 text-white" />
+      </button>
+
+      {/* Close button */}
+      <button
+        onClick={onClose}
+        className="absolute top-6 right-6 z-50 bg-white/10 hover:bg-white/20 rounded-full p-3 transition-all"
+      >
+        <X className="w-5 h-5 text-white" />
+      </button>
+
+      <div className="w-full max-w-md flex flex-col items-center gap-6">
+        {/* Export Canvas - Territory View */}
+        <div 
+          ref={exportRef}
+          className="w-full aspect-square max-w-[400px] relative flex flex-col items-center justify-center p-6"
+          style={{ background: 'transparent' }}
+        >
+          <div className="flex-1 w-full flex items-center justify-center">
+            <svg 
+              width={svgWidth} 
+              height={svgHeight} 
+              viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+              className="overflow-visible"
+            >
+              <defs>
+                <filter id="territoryGlow" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+                  <feMerge>
+                    <feMergeNode in="coloredBlur"/>
+                    <feMergeNode in="SourceGraphic"/>
+                  </feMerge>
+                </filter>
+                <linearGradient id="territoryFill" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.4" />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.4" />
+                </linearGradient>
+                <linearGradient id="territoryStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#06b6d4" />
+                  <stop offset="100%" stopColor="#3b82f6" />
+                </linearGradient>
+              </defs>
+              
+              {/* Territory fill area */}
+              {territoryPath && (
+                <>
+                  {/* Glow effect */}
+                  <path
+                    d={territoryPath}
+                    fill="rgba(6, 182, 212, 0.15)"
+                    stroke="none"
+                    filter="url(#territoryGlow)"
+                  />
+                  {/* Main territory fill */}
+                  <path
+                    d={territoryPath}
+                    fill="url(#territoryFill)"
+                    stroke="url(#territoryStroke)"
+                    strokeWidth="2"
+                    strokeOpacity="0.6"
+                  />
+                </>
+              )}
+              
+              {/* Route path on top */}
+              {pathString && (
+                <path
+                  d={pathString}
+                  fill="none"
+                  stroke="white"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeOpacity="0.9"
+                />
+              )}
+              
+              {/* Start point */}
+              {startPoint && (
+                <g>
+                  <circle cx={startPoint.x} cy={startPoint.y} r="12" fill="rgba(34, 197, 94, 0.3)" />
+                  <circle cx={startPoint.x} cy={startPoint.y} r="7" fill="#22c55e" />
+                  <circle cx={startPoint.x} cy={startPoint.y} r="3" fill="white" />
+                </g>
+              )}
+              
+              {/* End point */}
+              {endPoint && (
+                <g>
+                  <circle cx={endPoint.x} cy={endPoint.y} r="12" fill="rgba(249, 115, 22, 0.3)" />
+                  <circle cx={endPoint.x} cy={endPoint.y} r="7" fill="#f97316" />
+                  <circle cx={endPoint.x} cy={endPoint.y} r="3" fill="white" />
+                </g>
+              )}
+            </svg>
+          </div>
+
+          {/* Stats Overlay - Territory style */}
+          <div className="absolute bottom-4 left-4 right-4">
+            <div 
+              className="rounded-2xl p-4 backdrop-blur-md"
+              style={{ 
+                background: 'rgba(15, 23, 42, 0.75)',
+                border: '1px solid rgba(6, 182, 212, 0.2)'
+              }}
+            >
+              {/* Distance + Territory row */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-bold text-white tracking-tight">{distance.toFixed(2)}</span>
+                  <span className="text-sm text-white/50 font-medium">km</span>
+                </div>
+                {territoriesClaimed > 0 && (
+                  <div className="flex items-center gap-2 bg-cyan-500/20 px-3 py-1.5 rounded-full">
+                    <Flag className="w-4 h-4 text-cyan-400" />
+                    <span className="text-cyan-400 font-bold">{territoriesClaimed}</span>
+                    <span className="text-cyan-400/70 text-xs">tiles</span>
+                  </div>
+                )}
+              </div>
+              
+              {/* Time and Pace */}
+              <div className="flex justify-start gap-6">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-white/40" />
+                  <span className="text-white/80 font-medium">{time}</span>
+                </div>
+                <div className="w-px h-4 bg-white/20" />
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-white/40" />
+                  <span className="text-white/80 font-medium">{pace}<span className="text-white/40 text-sm">/km</span></span>
+                </div>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-white/5 text-center">
+                <span className="text-white/25 text-xs tracking-wider">TERRITORY RUNNER</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Activity badge with conquest label */}
+          <div className="absolute top-4 left-4">
+            <div 
+              className="rounded-full px-3 py-1.5 flex items-center gap-2"
+              style={{ 
+                background: 'rgba(6, 182, 212, 0.2)',
+                border: '1px solid rgba(6, 182, 212, 0.3)'
+              }}
+            >
+              <span className="text-base">{activityType === 'run' ? '🏃' : '🚴'}</span>
+              <span className="text-cyan-300 text-xs font-medium uppercase tracking-wide">
+                Territory Conquered
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="p-5 pt-0 space-y-2">
-          {/* Primary Action - Strava */}
+        <div className="w-full max-w-[400px] space-y-3">
           <Button
-            onClick={handleShareToStrava}
-            className="w-full bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl py-6 transition-all flex items-center justify-center gap-2 font-semibold text-base"
+            onClick={handleDownloadScreenshot}
+            disabled={isExporting}
+            className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white rounded-xl py-6 transition-all flex items-center justify-center gap-2 font-semibold text-base"
           >
-            <Share2 className="w-5 h-5" />
-            Share to Strava
+            <Download className="w-5 h-5" />
+            {isExporting ? 'Creating Image...' : 'Download Territory Map'}
           </Button>
 
-          {/* Secondary Actions */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-3">
             <Button
-              onClick={handleDownloadScreenshot}
-              disabled={isExporting}
-              className="bg-white/10 hover:bg-white/20 text-white border-0 rounded-xl py-4 transition-all flex items-center justify-center gap-2"
+              onClick={handleShareToStrava}
+              className="bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl py-4 transition-all flex items-center justify-center gap-2 font-medium"
             >
-              <Download className="w-4 h-4" />
-              {isExporting ? 'Saving...' : 'Save'}
+              <Share2 className="w-4 h-4" />
+              Strava
             </Button>
             
             <Button
@@ -383,20 +726,19 @@ Conquering the world one run at a time! 🌍
             </Button>
           </div>
 
-          {/* Native Share (if available) */}
           {typeof navigator !== 'undefined' && navigator.share && (
             <Button
               onClick={handleNativeShare}
-              className="w-full bg-white/5 hover:bg-white/10 text-white/70 border-0 rounded-xl py-3 transition-all text-sm"
+              className="w-full bg-white/5 hover:bg-white/10 text-white/60 border-0 rounded-xl py-3 transition-all text-sm"
             >
               More sharing options...
             </Button>
           )}
 
-          {/* Done */}
           <Button
             onClick={onClose}
-            className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white rounded-xl py-5 transition-all font-semibold mt-3"
+            variant="outline"
+            className="w-full border-white/20 text-white hover:bg-white/10 rounded-xl py-5 transition-all font-medium mt-2"
           >
             Done
           </Button>

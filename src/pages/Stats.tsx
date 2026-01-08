@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Trophy, Calendar, Clock, Activity, TrendingUp, MapPin, ChevronRight, Loader2 } from 'lucide-react';
+import { Trophy, Calendar, Clock, Activity, TrendingUp, MapPin, ChevronRight, Loader2, Share2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 import { api } from '@/lib/api';
 import BottomNavigation from '@/components/BottomNavigation';
+import RunSummaryExport from '@/components/RunSummaryExport';
 
 interface RunHistoryItem {
   id: number;
@@ -15,6 +16,7 @@ interface RunHistoryItem {
   paceMinKm: number;
   createdAt: string;
   territoriesClaimed: number;
+  gpsPoints?: { lat: number; lng: number; timestamp: number }[];
 }
 
 interface BestRun {
@@ -46,6 +48,7 @@ const Stats = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const [exportRun, setExportRun] = useState<RunHistoryItem | null>(null);
 
   useEffect(() => {
     fetchStatsData();
@@ -323,7 +326,19 @@ const Stats = () => {
                                 </div>
                               </div>
                             </div>
-                            <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 transition-colors" />
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExportRun(run);
+                                }}
+                                className="p-2 rounded-lg bg-white/5 hover:bg-cyan-500/20 text-white/40 hover:text-cyan-400 transition-all"
+                                title="Share / Export"
+                              >
+                                <Share2 className="w-4 h-4" />
+                              </button>
+                              <ChevronRight className="w-5 h-5 text-white/40 group-hover:text-white/80 transition-colors" />
+                            </div>
                           </div>
                         </motion.div>
                       ))}
@@ -353,6 +368,20 @@ const Stats = () => {
           </>
         )}
       </div>
+
+      {/* Export Modal from History */}
+      {exportRun && (
+        <RunSummaryExport
+          distance={exportRun.distanceKm}
+          time={formatTime(exportRun.durationSec)}
+          pace={formatPace(exportRun.paceMinKm).replace('/km', '')}
+          territoriesClaimed={exportRun.territoriesClaimed}
+          speed={exportRun.durationSec > 0 ? (exportRun.distanceKm / (exportRun.durationSec / 3600)) : 0}
+          activityType="run"
+          gpsPoints={exportRun.gpsPoints || []}
+          onClose={() => setExportRun(null)}
+        />
+      )}
 
       <BottomNavigation />
     </div>
