@@ -14,8 +14,12 @@ type Territory = {
   owner_id: number;
   strength: number;
   geojson: {
-    type: string;
-    coordinates: number[][][];
+    type: 'Feature';
+    geometry: {
+      type: 'Polygon';
+      coordinates: number[][][];
+    };
+    properties?: any;
   };
   team_id?: number;
   activity_type?: 'run' | 'cycle';
@@ -34,8 +38,11 @@ type Run = {
   id: number;
   user_id: number;
   geojson: {
-    type: string;
-    coordinates: number[][];
+    type: 'Feature';
+    geometry: {
+      type: 'Polygon' | 'LineString';
+      coordinates: number[][] | number[][][];
+    };
   };
   distance_km: number;
 };
@@ -701,7 +708,7 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
           <>
             {teamTerritories.map((team) => 
               team.territories.map((territory) => {
-                const coords = territory.geojson?.coordinates?.[0] || [];
+                const coords = territory.geojson?.geometry?.coordinates?.[0] || [];
                 if (coords.length === 0) return null;
                 
                 const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
@@ -721,7 +728,7 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
             )}
             {/* Individual territories (no team) */}
             {individualTerritories.map((territory) => {
-              const coords = territory.geojson?.coordinates?.[0] || [];
+              const coords = territory.geojson?.geometry?.coordinates?.[0] || [];
               if (coords.length === 0) return null;
               
               const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
@@ -742,7 +749,7 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
         ) : (
           // Individual View: Show territories with personal colors
           getFilteredTerritories().map((territory) => {
-            const coords = territory.geojson?.coordinates?.[0] || [];
+            const coords = territory.geojson?.geometry?.coordinates?.[0] || [];
             if (coords.length === 0) return null;
             
             const positions: LatLngExpression[] = coords.map(([lng, lat]) => [lat, lng]);
@@ -788,7 +795,7 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
 
         {/* Running Routes (Polylines) - Filtered */}
         {showRuns && getFilteredRuns().map((run) => {
-          const coords = run.geojson?.coordinates || [];
+          const coords = run.geojson?.geometry?.coordinates || [];
           if (coords.length === 0) return null;
           
           // Convert from [lng, lat] to [lat, lng] for Leaflet

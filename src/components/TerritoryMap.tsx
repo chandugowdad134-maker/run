@@ -37,7 +37,7 @@ const TerritoryMap = () => {
     const lats: number[] = [];
     const lngs: number[] = [];
     territories.forEach((t) => {
-      const coords = t.geojson?.coordinates?.[0] || [];
+      const coords = t.geojson?.geometry?.coordinates?.[0] || [];
       coords.forEach(([lng, lat]) => {
         lats.push(lat);
         lngs.push(lng);
@@ -63,7 +63,7 @@ const TerritoryMap = () => {
   };
 
   const territoryPolys = territories.map((t) => {
-    const coords = t.geojson?.coordinates?.[0] || [];
+    const coords = t.geojson?.geometry?.coordinates?.[0] || [];
     const pts = coords.map(([lng, lat]) => project(lng, lat));
     return { tileId: t.tile_id, owner: t.owner_id, strength: t.strength, pts };
   });
