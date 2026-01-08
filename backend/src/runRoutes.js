@@ -3,9 +3,9 @@ import { lineString, length as turfLength, buffer as turfBuffer } from '@turf/tu
 import { pool } from './db.js';
 import { requireAuth } from './middleware/auth.js';
 import { tileIdFromCoord, polygonFromTile, tileAreaKm2 } from './grid.js';
+import { validateRunSubmission } from './antiCheat.js';
 
 const router = express.Router();
-const MAX_SPEED_M_S = 20; // anti-cheat threshold (allows GPS inaccuracy spikes, blocks vehicles)
 const BUFFER_KM = 0.05; // ~50m buffer around path
 
 // GET /runs - Fetch recent runs
@@ -60,17 +60,28 @@ function haversine(a, b) {
 
 router.post('/', requireAuth, async (req, res) => {
   try {
-    const { points = [], distanceKm, durationSec } = req.body || {};
-    console.log(`[RUN] User ${req.userId} submitting run with ${points.length} points, ${distanceKm}km`);
+    const { points = [], distanceKm, durationSec, activityType = 'run' } = req.body || {};
+    console.log(`[RUN] User ${req.userId} submitting ${activityType} with ${points.length} points, ${distanceKm}km`);
     
-    const validationError = validateRun(points);
-    if (validationError) return res.status(400).json({ ok: false, error: validationError });
-
-    const maxSpeed = maxSegmentSpeed(points);
-    console.log(`[RUN] Max speed detected: ${maxSpeed.toFixed(2)} m/s (limit: ${MAX_SPEED_M_S} m/s)`);
-    if (maxSpeed > MAX_SPEED_M_S) {
-      return res.status(400).json({ ok: false, error: 'Run rejected: speed too high (possible vehicle).' });
+    // Comprehensive anti-cheat validation
+    const validation = validateRunSubmission(points, activityType);
+    
+    if (!validation.valid) {
+      console.log(`[RUN] Validation failed:`, validation.errors);
+      return res.status(400).json({ 
+        ok: false, 
+        error: validation.errors.join('. '),
+        warnings: validation.warnings,
+        stats: validation.stats
+      });
     }
+    
+    if (validation.warnings.length > 0) {
+      console.log(`[RUN] Warnings detected:`, validation.warnings);
+    }
+    
+    console.log(`[RUN] Validation passed - Max speed: ${(validation.stats.maxSpeed * 3.6).toFixed(1)} km/h, Avg accuracy: ${validation.stats.avgAccuracy?.toFixed(1)}m`);
+
 
     const line = lineString(points.map((p) => [p.lng, p.lat]));
     const computedDistance = distanceKm ?? turfLength(line, { units: 'kilometers' });
@@ -90,8 +101,19 @@ router.post('/', requireAuth, async (req, res) => {
       await client.query('BEGIN');
 
       const runInsert = await client.query(
-        'INSERT INTO runs (user_id, geojson, distance_km, duration_sec) VALUES ($1, $2, $3, $4) RETURNING id',
-        [req.userId, buffered, computedDistance, durationSec ?? null]
+        `INSERT INTO runs (user_id, geojson, distance_km, duration_sec, activity_type, validation_status, raw_points, max_speed, avg_accuracy) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+        [
+          req.userId, 
+          buffered, 
+          computedDistance, 
+          durationSec ?? null,
+          activityType,
+          JSON.stringify(validation),
+          JSON.stringify(points),
+          validation.stats.maxSpeed,
+          validation.stats.avgAccuracy || null
+        ]
       );
       const runId = runInsert.rows[0].id;
 
@@ -101,8 +123,8 @@ router.post('/', requireAuth, async (req, res) => {
         const { rows } = await client.query('SELECT * FROM territories WHERE tile_id = $1', [tileId]);
         if (rows.length === 0) {
           await client.query(
-            'INSERT INTO territories (tile_id, owner_id, strength, geojson, last_claimed) VALUES ($1, $2, $3, $4, NOW())',
-            [tileId, req.userId, 1, tilePoly]
+            'INSERT INTO territories (tile_id, owner_id, strength, geojson, last_claimed, activity_type, conquered_by_run_id) VALUES ($1, $2, $3, $4, NOW(), $5, $6)',
+            [tileId, req.userId, 1, tilePoly, activityType, runId]
           );
           await client.query(
             'INSERT INTO territory_history (tile_id, from_owner, to_owner) VALUES ($1, NULL, $2)',
@@ -113,14 +135,14 @@ router.post('/', requireAuth, async (req, res) => {
           const t = rows[0];
           if (t.owner_id === req.userId) {
             const strength = t.strength + 1;
-            await client.query('UPDATE territories SET strength = $1, last_claimed = NOW() WHERE tile_id = $2', [strength, tileId]);
+            await client.query('UPDATE territories SET strength = $1, last_claimed = NOW(), activity_type = $2, conquered_by_run_id = $3 WHERE tile_id = $4', [strength, activityType, runId, tileId]);
             updatedTiles.push({ tileId, ownerId: req.userId, strength, flipped: false });
           } else {
             const strength = t.strength - 1;
             if (strength <= 0) {
               await client.query(
-                'UPDATE territories SET owner_id = $1, strength = 1, last_claimed = NOW() WHERE tile_id = $2',
-                [req.userId, tileId]
+                'UPDATE territories SET owner_id = $1, strength = 1, last_claimed = NOW(), activity_type = $2, conquered_by_run_id = $3 WHERE tile_id = $4',
+                [req.userId, activityType, runId, tileId]
               );
               await client.query(
                 'INSERT INTO territory_history (tile_id, from_owner, to_owner) VALUES ($1, $2, $3)',
@@ -150,6 +172,63 @@ router.post('/', requireAuth, async (req, res) => {
         'UPDATE user_stats SET territories_owned = $1, area_km2 = $2, updated_at = NOW() WHERE user_id = $3',
         [owned, areaKm2, req.userId]
       );
+
+      // Update team stats if user is in a team
+      const { rows: teamRows } = await client.query(
+        'SELECT team_id FROM team_members WHERE user_id = $1 AND status = $2',
+        [req.userId, 'active']
+      );
+      
+      if (teamRows.length > 0) {
+        const teamId = teamRows[0].team_id;
+        
+        // Update team_member_stats
+        await client.query(
+          `INSERT INTO team_member_stats (team_id, user_id, distance_contributed_km, runs_contributed, territories_contributed)
+           VALUES ($1, $2, $3, 1, $4)
+           ON CONFLICT (team_id, user_id) DO UPDATE SET
+             distance_contributed_km = team_member_stats.distance_contributed_km + $3,
+             runs_contributed = team_member_stats.runs_contributed + 1,
+             territories_contributed = team_member_stats.territories_contributed + $4`,
+          [teamId, req.userId, computedDistance, updatedTiles.filter(t => t.flipped).length]
+        );
+
+        // Log run completion to team feed
+        const { addTeamActivity } = await import('./teamRoutes.js');
+        await addTeamActivity(client, teamId, req.userId, 'run_completed', {
+          distance_km: computedDistance,
+          duration_sec: durationSec,
+          tiles_captured: updatedTiles.filter(t => t.flipped).length
+        });
+
+        // Update any active challenges
+        await client.query(
+          `UPDATE team_challenges 
+           SET current_value = current_value + $1,
+               status = CASE 
+                 WHEN (current_value + $1) >= target_value THEN 'completed'
+                 ELSE status 
+               END
+           WHERE team_id = $2 AND status = 'active' AND type = 'distance'`,
+          [computedDistance, teamId]
+        );
+
+        // Check for newly completed challenges
+        const { rows: completedChallenges } = await client.query(
+          `SELECT * FROM team_challenges 
+           WHERE team_id = $1 AND status = 'completed' 
+           AND updated_at >= NOW() - INTERVAL '5 seconds'`,
+          [teamId]
+        );
+
+        for (const challenge of completedChallenges) {
+          await addTeamActivity(client, teamId, req.userId, 'challenge_completed', {
+            challenge_id: challenge.id,
+            title: challenge.title,
+            type: challenge.type
+          });
+        }
+      }
 
       await client.query('COMMIT');
       return res.json({ ok: true, runId, updatedTiles });

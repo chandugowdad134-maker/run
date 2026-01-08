@@ -46,6 +46,13 @@ export async function ensureSchema() {
       duration_sec INTEGER,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
+    
+    -- Anti-cheat system columns
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS activity_type TEXT DEFAULT 'run';
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS validation_status JSONB;
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS raw_points JSONB;
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS max_speed NUMERIC;
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS avg_accuracy NUMERIC;
   `);
 
   await pool.query(`
@@ -57,6 +64,9 @@ export async function ensureSchema() {
       geojson JSONB NOT NULL,
       last_claimed TIMESTAMPTZ DEFAULT NOW()
     );
+    -- Track activity type for each territory conquest
+    ALTER TABLE territories ADD COLUMN IF NOT EXISTS activity_type TEXT;
+    ALTER TABLE territories ADD COLUMN IF NOT EXISTS conquered_by_run_id INTEGER REFERENCES runs(id);
   `);
 
   await pool.query(`
@@ -75,6 +85,7 @@ export async function ensureSchema() {
       name TEXT NOT NULL,
       visibility TEXT DEFAULT 'public',
       scoring TEXT DEFAULT 'territories',
+      is_team_based BOOLEAN DEFAULT false,
       starts_at TIMESTAMPTZ DEFAULT NOW(),
       ends_at TIMESTAMPTZ,
       created_by INTEGER REFERENCES users(id),
@@ -109,6 +120,40 @@ export async function ensureSchema() {
       role TEXT DEFAULT 'member',
       joined_at TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (team_id, user_id)
+    );
+    ALTER TABLE team_members ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+  `);
+
+  // Add team enhancements
+  await pool.query(`
+    ALTER TABLE teams
+    ADD COLUMN IF NOT EXISTS visibility TEXT DEFAULT 'public',
+    ADD COLUMN IF NOT EXISTS invitation_code TEXT UNIQUE,
+    ADD COLUMN IF NOT EXISTS team_color TEXT DEFAULT '#7C3AED';
+  `);
+
+  // Team invitations for managing invite links
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_invitations (
+      id SERIAL PRIMARY KEY,
+      team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+      invitation_code TEXT UNIQUE NOT NULL,
+      created_by INTEGER REFERENCES users(id),
+      expires_at TIMESTAMPTZ,
+      max_uses INTEGER,
+      current_uses INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Team competitions linking teams to competitions
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_competitions (
+      team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+      competition_id INTEGER REFERENCES competitions(id) ON DELETE CASCADE,
+      score INTEGER DEFAULT 0,
+      joined_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (team_id, competition_id)
     );
   `);
 
@@ -222,6 +267,86 @@ export async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS most_contested_tile TEXT;
   `);
 
+  // Add team competition support
+  await pool.query(`
+    ALTER TABLE competitions
+    ADD COLUMN IF NOT EXISTS is_team_based BOOLEAN DEFAULT false;
+  `);
+
+  // Add team system enhancements
+  await pool.query(`
+    ALTER TABLE teams
+    ADD COLUMN IF NOT EXISTS team_color TEXT DEFAULT '#8B5CF6',
+    ADD COLUMN IF NOT EXISTS team_avatar TEXT,
+    ADD COLUMN IF NOT EXISTS rules JSONB DEFAULT '{"min_distance_m": 500, "max_daily_distance_km": 20, "territory_decay_days": 7, "friendly_fire": false}'::jsonb;
+  `);
+
+  // Team challenges table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_challenges (
+      id SERIAL PRIMARY KEY,
+      team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      target_value NUMERIC NOT NULL,
+      current_value NUMERIC DEFAULT 0,
+      starts_at TIMESTAMPTZ DEFAULT NOW(),
+      ends_at TIMESTAMPTZ,
+      status TEXT DEFAULT 'active',
+      reward JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Team feed/activity
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_feed (
+      id SERIAL PRIMARY KEY,
+      team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      activity_type TEXT NOT NULL,
+      data JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Team stats (cached aggregations)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_stats (
+      team_id INTEGER PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE,
+      total_distance_km NUMERIC DEFAULT 0,
+      total_runs INTEGER DEFAULT 0,
+      territory_owned_km2 NUMERIC DEFAULT 0,
+      active_members INTEGER DEFAULT 0,
+      weekly_distance_km NUMERIC DEFAULT 0,
+      monthly_distance_km NUMERIC DEFAULT 0,
+      rank_city INTEGER,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Team member stats (individual contributions)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_member_stats (
+      team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      distance_contributed_km NUMERIC DEFAULT 0,
+      runs_contributed INTEGER DEFAULT 0,
+      territories_contributed INTEGER DEFAULT 0,
+      last_run_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (team_id, user_id)
+    );
+  `);
+
+  // Add team_id to territories for team ownership
+  await pool.query(`
+    ALTER TABLE territories
+    ADD COLUMN IF NOT EXISTS team_id INTEGER REFERENCES teams(id),
+    ADD COLUMN IF NOT EXISTS ownership_percentage NUMERIC DEFAULT 100;
+  `);
+
   // Add username as unique if not already
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL;
@@ -231,10 +356,17 @@ export async function ensureSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_territories_tile_id ON territories(tile_id);
     CREATE INDEX IF NOT EXISTS idx_territories_owner ON territories(owner_id);
+    CREATE INDEX IF NOT EXISTS idx_territories_team ON territories(team_id) WHERE team_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id);
     CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_territory_history_tile ON territory_history(tile_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id) WHERE read = false;
     CREATE INDEX IF NOT EXISTS idx_friendships_status ON friendships(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_teams_invitation_code ON teams(invitation_code) WHERE invitation_code IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_team_invitations_code ON team_invitations(invitation_code);
+    CREATE INDEX IF NOT EXISTS idx_team_competitions_team ON team_competitions(team_id);
+    CREATE INDEX IF NOT EXISTS idx_team_challenges_team ON team_challenges(team_id, status);
+    CREATE INDEX IF NOT EXISTS idx_team_feed_team ON team_feed(team_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_team_member_stats ON team_member_stats(team_id, user_id);
   `);
 }

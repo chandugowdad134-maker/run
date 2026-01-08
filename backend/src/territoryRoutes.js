@@ -29,6 +29,70 @@ router.get('/history/:tileId', requireAuth, async (req, res) => {
   }
 });
 
+// Get detailed info about a territory (for click popup)
+router.get('/:tileId/info', async (req, res) => {
+  try {
+    const { tileId } = req.params;
+    
+    // Get territory with owner info
+    const territoryQuery = `
+      SELECT 
+        t.tile_id,
+        t.owner_id,
+        t.strength,
+        t.last_claimed,
+        u.username as owner_name,
+        r.distance_km,
+        r.duration_sec
+      FROM territories t
+      LEFT JOIN users u ON t.owner_id = u.id
+      LEFT JOIN runs r ON r.user_id = t.owner_id AND r.id = (
+        SELECT id FROM runs 
+        WHERE user_id = t.owner_id 
+        ORDER BY created_at DESC 
+        LIMIT 1
+      )
+      WHERE t.tile_id = $1
+    `;
+    
+    const { rows: territoryRows } = await pool.query(territoryQuery, [tileId]);
+    
+    if (territoryRows.length === 0) {
+      return res.status(404).json({ ok: false, error: 'Territory not found' });
+    }
+    
+    // Get history with owner names
+    const historyQuery = `
+      SELECT 
+        th.tile_id,
+        th.from_owner,
+        u1.username as from_owner_name,
+        th.to_owner,
+        u2.username as to_owner_name,
+        th.changed_at
+      FROM territory_history th
+      LEFT JOIN users u1 ON th.from_owner = u1.id
+      LEFT JOIN users u2 ON th.to_owner = u2.id
+      WHERE th.tile_id = $1
+      ORDER BY th.changed_at DESC
+      LIMIT 10
+    `;
+    
+    const { rows: historyRows } = await pool.query(historyQuery, [tileId]);
+    
+    return res.json({
+      ok: true,
+      territory: {
+        ...territoryRows[0],
+        history: historyRows
+      }
+    });
+  } catch (err) {
+    console.error('Territory info fetch failed:', err);
+    return res.status(500).json({ ok: false, error: 'Failed to fetch territory info' });
+  }
+});
+
 // Get territory context for current location (with user's personal best)
 router.post('/context', requireAuth, async (req, res) => {
   try {
@@ -136,6 +200,86 @@ router.post('/context', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Territory context fetch failed:', err);
     return res.status(500).json({ ok: false, error: 'Failed to fetch territory context' });
+  }
+});
+
+// Get territories grouped by teams
+router.get('/teams', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || '500', 10), 2000);
+    
+    // Get territories with team information
+    const query = `
+      SELECT 
+        t.tile_id,
+        t.owner_id,
+        t.strength,
+        t.geojson,
+        t.last_claimed,
+        tm.team_id,
+        teams.name as team_name,
+        teams.team_color
+      FROM territories t
+      LEFT JOIN team_members tm ON t.owner_id = tm.user_id AND tm.status = 'active'
+      LEFT JOIN teams ON tm.team_id = teams.id
+      ORDER BY t.last_claimed DESC
+      LIMIT $1
+    `;
+    
+    console.log('Fetching team territories with limit:', limit);
+    const { rows } = await pool.query(query, [limit]);
+    console.log('Found territories:', rows.length);
+    
+    // Group territories by team
+    const teamTerritories = new Map();
+    const individualTerritories = [];
+    
+    rows.forEach(row => {
+      if (row.team_id) {
+        const teamKey = row.team_id;
+        if (!teamTerritories.has(teamKey)) {
+          teamTerritories.set(teamKey, {
+            team_id: row.team_id,
+            team_name: row.team_name,
+            team_color: row.team_color || '#7C3AED',
+            territories: [],
+            total_strength: 0,
+            tile_count: 0
+          });
+        }
+        const teamData = teamTerritories.get(teamKey);
+        teamData.territories.push({
+          tile_id: row.tile_id,
+          owner_id: row.owner_id,
+          strength: row.strength,
+          geojson: row.geojson,
+          last_claimed: row.last_claimed
+        });
+        teamData.total_strength += row.strength;
+        teamData.tile_count += 1;
+      } else {
+        individualTerritories.push({
+          tile_id: row.tile_id,
+          owner_id: row.owner_id,
+          strength: row.strength,
+          geojson: row.geojson,
+          last_claimed: row.last_claimed,
+          team_id: null
+        });
+      }
+    });
+    
+    console.log('Team groups:', teamTerritories.size, 'Individual:', individualTerritories.length);
+    
+    return res.json({ 
+      ok: true, 
+      teams: Array.from(teamTerritories.values()),
+      individual: individualTerritories
+    });
+  } catch (err) {
+    console.error('Team territories fetch failed:', err);
+    console.error('Error stack:', err.stack);
+    return res.status(500).json({ ok: false, error: 'Failed to fetch team territories', details: err.message });
   }
 });
 
