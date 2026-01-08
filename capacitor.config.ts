@@ -18,6 +18,9 @@ const config: CapacitorConfig = {
   },
   server: {
     androidScheme: 'http'
+  },
+  ios: {
+    scheme: 'TerritoryRun'
   }
 };
 
