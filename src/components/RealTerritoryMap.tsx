@@ -630,14 +630,14 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
                 <span className="text-gray-900 font-bold">{selectedTerritory.strength}</span>
               </div>
               
-              {selectedTerritory.distance_km && (
+              {selectedTerritory.distance_km != null && (
                 <div className="flex items-center justify-between py-2 border-b">
                   <span className="text-gray-600 font-medium">Distance</span>
-                  <span className="text-gray-900 font-bold">{selectedTerritory.distance_km.toFixed(2)} km</span>
+                  <span className="text-gray-900 font-bold">{parseFloat(selectedTerritory.distance_km).toFixed(2)} km</span>
                 </div>
               )}
               
-              {selectedTerritory.duration_sec && (
+              {selectedTerritory.duration_sec != null && (
                 <div className="flex items-center justify-between py-2 border-b">
                   <span className="text-gray-600 font-medium">Time</span>
                   <span className="text-gray-900 font-bold">{formatDuration(selectedTerritory.duration_sec)}</span>

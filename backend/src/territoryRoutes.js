@@ -127,25 +127,26 @@ router.get('/:tileId/info', async (req, res) => {
   try {
     const { tileId } = req.params;
     
-    // Get territory with owner info
+    // Get territory with owner info and run data
     const territoryQuery = `
       SELECT 
         t.tile_id,
         t.owner_id,
         t.strength,
         t.last_claimed,
+        t.geojson,
         u.username as owner_name,
         r.distance_km,
-        r.duration_sec
+        r.duration_sec,
+        r.created_at as run_date
       FROM territories t
       LEFT JOIN users u ON t.owner_id = u.id
-      LEFT JOIN runs r ON r.user_id = t.owner_id AND r.id = (
-        SELECT id FROM runs 
-        WHERE user_id = t.owner_id 
-        ORDER BY created_at DESC 
-        LIMIT 1
-      )
+      LEFT JOIN territory_claims tc ON tc.tile_id = t.tile_id 
+        AND tc.user_id = t.owner_id
+      LEFT JOIN runs r ON r.id = tc.run_id
       WHERE t.tile_id = $1
+      ORDER BY t.last_claimed DESC
+      LIMIT 1
     `;
     
     const { rows: territoryRows } = await pool.query(territoryQuery, [tileId]);
