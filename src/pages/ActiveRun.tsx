@@ -404,7 +404,7 @@ const ActiveRun = () => {
       // Add to sync queue
       await db.syncQueue.add({
         type: 'run',
-        data: { runId, points, distance, durationSec, activityType, updatedTiles },
+        data: { runId, points, distanceKm: distance, durationSec, activityType, updatedTiles },
         timestamp: Date.now()
       });
 
