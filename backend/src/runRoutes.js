@@ -278,45 +278,54 @@ router.post('/sync', requireAuth, async (req, res) => {
     const { runs = [] } = req.body || {}; // Array of { points, distanceKm, durationSec, activityType, updatedTiles }
     console.log(`[SYNC] User ${req.userId} syncing ${runs.length} runs`);
 
+    if (!Array.isArray(runs) || runs.length === 0) {
+      return res.json({ ok: true, syncedRuns: [] });
+    }
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       const syncedRuns = [];
-      for (const runData of runs) {
-        const { points, distanceKm, durationSec, activityType, updatedTiles } = runData;
+      for (let i = 0; i < runs.length; i++) {
+        try {
+          const runData = runs[i];
+          const { points, distanceKm, durationSec, activityType = 'run', updatedTiles = [] } = runData;
 
-        // Re-validate server-side (though client already validated)
-        const validation = validateRunSubmission(points, activityType);
-        if (!validation.valid) {
-          console.log(`[SYNC] Validation failed for run:`, validation.errors);
-          continue; // Skip invalid runs
-        }
+          console.log(`[SYNC] Processing run ${i + 1}/${runs.length}: ${points?.length || 0} points`);
 
-        const line = lineString(points.map((p) => [p.lng, p.lat]));
-        const computedDistance = distanceKm ?? turfLength(line, { units: 'kilometers' });
-        const buffered = turfBuffer(line, BUFFER_KM, { units: 'kilometers' });
+          // Re-validate server-side (though client already validated)
+          const validation = validateRunSubmission(points, activityType);
+          if (!validation.valid) {
+            console.log(`[SYNC] Validation failed for run ${i + 1}:`, validation.errors);
+            continue; // Skip invalid runs
+          }
 
-        const { getTilesFromGeometry } = await import('./grid.js');
-        const touchedTiles = buffered?.geometry ? getTilesFromGeometry(buffered.geometry) : [];
-        const tileIds = new Set(touchedTiles.length > 0 ? touchedTiles : points.map((p) => tileIdFromCoord(p.lat, p.lng)));
+          const line = lineString(points.map((p) => [p.lng, p.lat]));
+          const computedDistance = distanceKm ?? turfLength(line, { units: 'kilometers' });
+          const buffered = turfBuffer(line, BUFFER_KM, { units: 'kilometers' });
 
-        const runInsert = await client.query(
-          `INSERT INTO runs (user_id, geojson, distance_km, duration_sec, activity_type, validation_status, raw_points, max_speed, avg_accuracy) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-          [
-            req.userId, 
-            buffered, 
-            computedDistance, 
-            durationSec ?? null,
-            activityType,
-            JSON.stringify(validation),
-            JSON.stringify(points),
-            validation.stats.maxSpeed,
-            validation.stats.avgAccuracy || null
-          ]
-        );
-        const runId = runInsert.rows[0].id;
+          const { getTilesFromGeometry } = await import('./grid.js');
+          const touchedTiles = buffered?.geometry ? getTilesFromGeometry(buffered.geometry) : [];
+          const tileIds = new Set(touchedTiles.length > 0 ? touchedTiles : points.map((p) => tileIdFromCoord(p.lat, p.lng)));
+
+          const runInsert = await client.query(
+            `INSERT INTO runs (user_id, geojson, distance_km, duration_sec, activity_type, validation_status, raw_points, max_speed, avg_accuracy) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+            [
+              req.userId, 
+              buffered, 
+              computedDistance, 
+              durationSec ?? null,
+              activityType,
+              JSON.stringify(validation),
+              JSON.stringify(points),
+              validation.stats.maxSpeed,
+              validation.stats.avgAccuracy || null
+            ]
+          );
+          const runId = runInsert.rows[0].id;
+          console.log(`[SYNC] Inserted run ${runId} for user ${req.userId}`);
 
         // Persist tile touches
         const tileIdList = Array.from(tileIds);
@@ -373,14 +382,19 @@ router.post('/sync', requireAuth, async (req, res) => {
         }
 
         // Update user stats
-        await client.query(
-          `INSERT INTO user_stats (user_id, total_distance_km, territories_owned, area_km2)
-           VALUES ($1, $2, 0, 0)
-           ON CONFLICT (user_id) DO UPDATE SET total_distance_km = user_stats.total_distance_km + $2, updated_at = NOW()`,
-          [req.userId, computedDistance]
-        );
+          // Update user stats
+          await client.query(
+            `INSERT INTO user_stats (user_id, total_distance_km, territories_owned, area_km2)
+             VALUES ($1, $2, 0, 0)
+             ON CONFLICT (user_id) DO UPDATE SET total_distance_km = user_stats.total_distance_km + $2, updated_at = NOW()`,
+            [req.userId, computedDistance]
+          );
 
-        syncedRuns.push({ runId, updatedTiles });
+          syncedRuns.push({ runId, updatedTiles });
+        } catch (runErr) {
+          console.error(`[SYNC] Error processing run ${i + 1}:`, runErr);
+          // Continue with next run instead of failing entire sync
+        }
       }
 
       // Refresh owned counts after all runs
@@ -395,6 +409,7 @@ router.post('/sync', requireAuth, async (req, res) => {
       );
 
       await client.query('COMMIT');
+      console.log(`[SYNC] Successfully synced ${syncedRuns.length}/${runs.length} runs for user ${req.userId}`);
 
       // Invalidate territory caches
       await redisDel('territories:all:*');
@@ -403,8 +418,9 @@ router.post('/sync', requireAuth, async (req, res) => {
       return res.json({ ok: true, syncedRuns });
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error('Sync failed:', err);
-      return res.status(500).json({ ok: false, error: 'Sync failed' });
+      console.error('[SYNC] Transaction failed:', err);
+      console.error('[SYNC] Error stack:', err.stack);
+      return res.status(500).json({ ok: false, error: 'Sync failed', details: err.message });
     } finally {
       client.release();
     }
