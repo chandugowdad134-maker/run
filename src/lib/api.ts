@@ -1,6 +1,29 @@
+import { Capacitor } from '@capacitor/core';
 import { db } from './db';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+// Use environment variable for API URL, but allow mobile build override
+const MOBILE_DEV_IP = 'http://192.168.0.117:4000';
+const rawApiUrl = import.meta.env.VITE_API_URL;
+const mobileApiUrl = import.meta.env.VITE_MOBILE_API_URL;
+const isMobileBuildFlag = import.meta.env.VITE_MOBILE_BUILD === true || import.meta.env.VITE_MOBILE_BUILD === 'true';
+const isNativePlatform = Capacitor?.isNativePlatform?.() ?? (Capacitor.getPlatform?.() !== 'web');
+const isMobileRuntime = isMobileBuildFlag || isNativePlatform;
+
+const isLocalhostUrl = (url: string) => /localhost|127\.0\.0\.1|::1/.test(url);
+
+// On mobile/native, never use localhost; fall back to a LAN/explicit mobile URL.
+let API_URL: string;
+if (isMobileRuntime) {
+  if (rawApiUrl && !isLocalhostUrl(rawApiUrl)) {
+    API_URL = rawApiUrl;
+  } else if (mobileApiUrl) {
+    API_URL = mobileApiUrl;
+  } else {
+    API_URL = MOBILE_DEV_IP;
+  }
+} else {
+  API_URL = rawApiUrl || 'http://localhost:4000';
+}
 
 function getToken() {
   return localStorage.getItem('auth_token');

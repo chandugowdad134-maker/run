@@ -1,4 +1,5 @@
 import { lineString, buffer as turfBuffer, polygon, area, booleanIntersects } from '@turf/turf';
+import geohash from 'ngeohash';
 
 const TILE_PRECISION = 7;
 const BUFFER_KM = 0.05;

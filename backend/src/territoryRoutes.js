@@ -1,15 +1,16 @@
 import express from 'express';
 import { pool } from './db.js';
 import { requireAuth } from './middleware/auth.js';
-import { redisClient } from './server.js';
+import { getRedisClient, isRedisAvailable } from './server.js';
 
 const router = express.Router();
 
 // Helper function to safely use Redis
 const redisGet = async (key) => {
   try {
-    if (redisClient && redisClient.isOpen) {
-      return await redisClient.get(key);
+    if (isRedisAvailable()) {
+      const redis = getRedisClient();
+      return await redis.get(key);
     }
   } catch (err) {
     console.warn('Redis get failed:', err.message);
@@ -19,8 +20,9 @@ const redisGet = async (key) => {
 
 const redisSetEx = async (key, ttl, value) => {
   try {
-    if (redisClient && redisClient.isOpen) {
-      await redisClient.setEx(key, ttl, value);
+    if (isRedisAvailable()) {
+      const redis = getRedisClient();
+      await redis.setEx(key, ttl, value);
     }
   } catch (err) {
     console.warn('Redis set failed:', err.message);

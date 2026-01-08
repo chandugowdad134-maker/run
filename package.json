@@ -10,14 +10,14 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "cap:sync": "cap sync",
-    "cap:build": "npm run build && cap sync",
+    "cap:build": "VITE_MOBILE_BUILD=true npm run build && cap sync",
     "cap:open:android": "cap open android",
     "cap:open:ios": "cap open ios",
     "cap:run:android": "cap run android",
     "cap:run:ios": "cap run ios",
     "mobile:setup": "npm run build && cap add android && cap add ios",
-    "mobile:android": "npm run build && cap sync android && cap open android",
-    "mobile:ios": "npm run build && cap sync ios && cap open ios"
+    "mobile:android": "VITE_MOBILE_BUILD=true npm run build && cap sync android && cap open android",
+    "mobile:ios": "VITE_MOBILE_BUILD=true npm run build && cap sync ios && cap open ios"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",

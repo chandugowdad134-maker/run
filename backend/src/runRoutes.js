@@ -4,10 +4,22 @@ import { pool } from './db.js';
 import { requireAuth } from './middleware/auth.js';
 import { tileIdFromCoord, polygonFromTile, tileAreaKm2 } from './grid.js';
 import { validateRunSubmission } from './antiCheat.js';
-import { redisClient } from './server.js';
+import { getRedisClient, isRedisAvailable } from './server.js';
 
 const router = express.Router();
 const BUFFER_KM = 0.05; // ~50m buffer around path
+
+// Helper function to safely use Redis
+const redisDel = async (pattern) => {
+  try {
+    if (isRedisAvailable()) {
+      const redis = getRedisClient();
+      await redis.del(pattern);
+    }
+  } catch (err) {
+    console.warn('Redis del failed:', err.message);
+  }
+};
 
 // GET /runs - Fetch recent runs
 router.get('/', async (req, res) => {
@@ -243,8 +255,8 @@ router.post('/', requireAuth, async (req, res) => {
       await client.query('COMMIT');
 
       // Invalidate territory caches
-      await redisClient.del('territories:all:*');
-      await redisClient.del(`territories:${req.userId}:*`);
+      await redisDel('territories:all:*');
+      await redisDel(`territories:${req.userId}:*`);
 
       return res.json({ ok: true, runId, updatedTiles });
     } catch (err) {
@@ -383,8 +395,8 @@ router.post('/sync', requireAuth, async (req, res) => {
       await client.query('COMMIT');
 
       // Invalidate territory caches
-      await redisClient.del('territories:all:*');
-      await redisClient.del(`territories:${req.userId}:*`);
+      await redisDel('territories:all:*');
+      await redisDel(`territories:${req.userId}:*`);
 
       return res.json({ ok: true, syncedRuns });
     } catch (err) {

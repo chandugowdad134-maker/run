@@ -118,7 +118,6 @@ const LiveRunMap = ({
     ? [currentPosition.latitude, currentPosition.longitude] as [number, number]
     : defaultCenter;
   
-  const mapContainerRef = useRef<HTMLDivElement>(null);
   const [nearbyTerritories, setNearbyTerritories] = useState<Territory[]>([]);
 
   // Fetch nearby territories when position changes
@@ -154,25 +153,9 @@ const LiveRunMap = ({
     p.longitude,
   ]);
 
-  // Apply CSS rotation to map container when heading changes (navigation-style)
-  useEffect(() => {
-    if (mapContainerRef.current && heading !== null && followMode === 'follow') {
-      const rotation = -heading; // Negative because we rotate map, not compass
-      mapContainerRef.current.style.transform = `rotate(${rotation}deg)`;
-      mapContainerRef.current.style.transition = 'transform 0.3s ease-out';
-    } else if (mapContainerRef.current) {
-      mapContainerRef.current.style.transform = 'rotate(0deg)';
-    }
-  }, [heading, followMode]);
-
   return (
     <div className="w-full h-full rounded-xl overflow-hidden relative bg-gray-900">
-      {/* Leaflet Map Container with rotation wrapper */}
-      <div 
-        ref={mapContainerRef}
-        className="w-full h-full"
-        style={{ transformOrigin: 'center center' }}
-      >
+      <div className="w-full h-full">
         <MapContainer
           center={center}
           zoom={smartZoom}

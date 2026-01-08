@@ -14,26 +14,53 @@ import teamRouter from './teamRoutes.js';
 import notificationRouter from './notificationRoutes.js';
 import privacyRouter from './privacyRoutes.js';
 import statsRouter from './statsRoutes.js';
+import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicDir = path.resolve(__dirname, '../../public');
 
-// Redis client
-const redisClient = createClient({
-  url: process.env.REDIS_URL || 'redis://localhost:6379'
-});
+// Redis client - lazy initialization
+let redisClient = null;
+let redisConnected = false;
 
-redisClient.on('error', (err) => {
-  // Don't log Redis errors during startup - just silently fail
-  if (process.env.NODE_ENV === 'production') {
-    console.warn('Redis not available:', err.message);
+function getRedisClient() {
+  if (!redisClient) {
+    redisClient = createClient({
+      url: process.env.REDIS_URL || 'redis://localhost:6379'
+    });
+
+    redisClient.on('error', (err) => {
+      redisConnected = false;
+      // Only log Redis errors in development, warn in production
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Redis Client Error', err);
+      } else {
+        console.warn('Redis not available');
+      }
+    });
+    redisClient.on('connect', () => {
+      redisConnected = true;
+      console.log('Connected to Redis');
+    });
   }
-});
-redisClient.on('connect', () => console.log('Connected to Redis'));
+  return redisClient;
+}
+
+function isRedisAvailable() {
+  return redisClient && redisConnected && redisClient.isOpen;
+}
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static assets (including favicon) from project public folder
+app.use(express.static(publicDir));
 
 app.use('/auth', authRouter);
 app.use('/runs', runRouter);
@@ -46,6 +73,14 @@ app.use('/teams', teamRouter);
 app.use('/notifications', notificationRouter);
 app.use('/privacy', privacyRouter);
 app.use('/stats', statsRouter);
+
+// Serve a favicon to avoid noisy 404s when the API host is hit in a browser
+app.get('/favicon.ico', (req, res) => {
+  const faviconPath = path.resolve(__dirname, '../../public/favicon.ico');
+  res.sendFile(faviconPath, err => {
+    if (err) res.status(404).end();
+  });
+});
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, message: 'API is running' });
@@ -69,22 +104,30 @@ app.use((err, req, res, next) => {
   res.status(500).json({ ok: false, error: 'Internal server error' });
 });
 
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
 async function start() {
   try {
     await verifyDatabaseConnection();
     await ensureSchema();
     console.log('Connected to database');
 
-    // Try to connect to Redis, but don't fail if it's not available
-    try {
-      await redisClient.connect();
-      console.log('Connected to Redis');
-    } catch (redisError) {
-      console.warn('Redis not available, continuing without caching:', redisError.message);
-    }
+    // Note: Redis connection is lazy - will connect when first used
+    // This prevents startup delays and allows the server to run without Redis
 
-    app.listen(PORT, () => {
-      console.log(`API ready on http://localhost:${PORT}`);
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`API ready on http://0.0.0.0:${PORT}`);
+      console.log(`Accessible at http://localhost:${PORT} (local) and http://${getLocalIP()}:${PORT} (network)`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -95,4 +138,4 @@ async function start() {
 start();
 
 // Export for use in routes
-export { redisClient };
+export { getRedisClient, isRedisAvailable };

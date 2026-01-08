@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { syncRuns } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function useSync() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<{ current: number; total: number } | null>(null);
   const { toast } = useToast();
+  const { refresh } = useAuth();
 
   useEffect(() => {
     const handleOnline = () => {
@@ -41,6 +43,8 @@ export function useSync() {
     try {
       const result = await syncRuns();
       if (result.synced > 0) {
+        // Refresh user profile to get updated stats
+        await refresh();
         toast({
           title: 'Sync Complete',
           description: `Synced ${result.synced} runs to server`,
