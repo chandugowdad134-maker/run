@@ -124,6 +124,8 @@ router.get('/:runId/info', async (req, res) => {
     const { runId } = req.params;
     const userId = req.user?.id || null;
     
+    console.log(`[Territory Info] Fetching runId=${runId}, userId=${userId}`);
+    
     // Get main territory with owner info and run data
     const territoryQuery = `
       SELECT 
@@ -147,21 +149,36 @@ router.get('/:runId/info', async (req, res) => {
     `;
     
     const { rows: territoryRows } = await pool.query(territoryQuery, [runId]);
+    console.log(`[Territory Info] Territory query returned ${territoryRows.length} rows`);
 
     let territory = territoryRows[0];
 
     // Fallback: if no territory exists for this run, try to build minimal info from the run row
     if (!territory) {
+      console.log(`[Territory Info] No territory found, trying runs table fallback`);
       const { rows: runRows } = await pool.query(
         'SELECT id, user_id, geojson, distance_km, duration_sec, created_at, activity_type FROM runs WHERE id = $1',
         [runId]
       );
+      
+      console.log(`[Territory Info] Run query returned ${runRows.length} rows`);
 
       if (runRows.length === 0) {
+        console.log(`[Territory Info] No run found either, returning 404`);
         return res.status(404).json({ ok: false, error: 'Territory not found' });
       }
 
       const run = runRows[0];
+      console.log(`[Territory Info] Using run as fallback: user_id=${run.user_id}, distance=${run.distance_km}km`);
+      
+      // Get user info for the fallback territory
+      const { rows: userRows } = await pool.query(
+        'SELECT id, username, avatar_url FROM users WHERE id = $1',
+        [run.user_id]
+      );
+      
+      const user = userRows[0] || {};
+      
       territory = {
         id: run.id,
         run_id: run.id,
@@ -170,8 +187,8 @@ router.get('/:runId/info', async (req, res) => {
         created_at: run.created_at,
         distance_km: run.distance_km,
         activity_type: run.activity_type,
-        owner_name: null,
-        avatar_url: null,
+        owner_name: user.username || 'Unknown',
+        avatar_url: user.avatar_url || null,
         run_distance: run.distance_km,
         run_duration: run.duration_sec,
         run_date: run.created_at,
@@ -201,6 +218,7 @@ router.get('/:runId/info', async (req, res) => {
     `;
     
     const { rows: overlappingRows } = await pool.query(overlappingQuery, [runId]);
+    console.log(`[Territory Info] Found ${overlappingRows.length} overlapping territories`);
     
     // Get top performers (last 30 days, sorted by distance)
     const topPerformersQuery = `
@@ -208,20 +226,29 @@ router.get('/:runId/info', async (req, res) => {
         u.id,
         u.username,
         u.avatar_url,
-        COUNT(*) as run_count,
-        SUM(t.distance_km) as total_distance,
-        AVG(t.distance_km) as avg_distance,
-        MIN(CASE WHEN r.duration_sec > 0 AND t.distance_km > 0 THEN r.duration_sec / t.distance_km ELSE NULL END) as best_pace_sec_per_km
+        COUNT(DISTINCT t.run_id) as run_count,
+        COALESCE(SUM(t.distance_km), 0) as total_distance,
+        COALESCE(AVG(t.distance_km), 0) as avg_distance,
+        MIN(CASE WHEN r.duration_sec > 0 AND t.distance_km > 0 THEN r.duration_sec::float / t.distance_km ELSE NULL END) as best_pace_sec_per_km
       FROM territories t
       LEFT JOIN users u ON t.owner_id = u.id
       LEFT JOIN runs r ON r.id = t.run_id
       WHERE t.created_at >= NOW() - INTERVAL '30 days'
+        AND u.id IS NOT NULL
       GROUP BY u.id, u.username, u.avatar_url
-      ORDER BY total_distance DESC
+      ORDER BY total_distance DESC NULLS LAST
       LIMIT 10
     `;
     
     const { rows: topPerformersRows } = await pool.query(topPerformersQuery);
+    console.log(`[Territory Info] Found ${topPerformersRows.length} top performers`);
+    
+    console.log(`[Territory Info] Returning territory:`, {
+      runId: territory.run_id,
+      ownerId: territory.owner_id,
+      ownerName: territory.owner_name,
+      distance: territory.distance_km
+    });
     
     return res.json({
       ok: true,
