@@ -47,7 +47,6 @@ router.get('/', async (req, res) => {
         t.*,
         u.username as owner_name,
         u.avatar_url,
-        r.id as run_id,
         r.created_at as run_date
       FROM territories t
       LEFT JOIN users u ON t.owner_id = u.id
@@ -224,18 +223,20 @@ router.get('/teams', async (req, res) => {
     // Get territories with owner information
     const query = `
       SELECT 
-        t.tile_id,
+        t.id,
+        t.run_id,
         t.owner_id,
-        t.strength,
         t.geojson,
-        t.last_claimed,
+        t.created_at,
+        t.activity_type,
+        t.distance_km,
         tm.team_id,
         teams.name as team_name,
         teams.team_color
       FROM territories t
       LEFT JOIN team_members tm ON t.owner_id = tm.user_id AND tm.status = 'active'
       LEFT JOIN teams ON tm.team_id = teams.id
-      ORDER BY t.last_claimed DESC
+      ORDER BY t.created_at DESC
       LIMIT $1
     `;
     
@@ -256,27 +257,31 @@ router.get('/teams', async (req, res) => {
             team_name: row.team_name,
             team_color: row.team_color || '#7C3AED',
             territories: [],
-            total_strength: 0,
-            tile_count: 0
+            total_distance: 0,
+            territory_count: 0
           });
         }
         const teamData = teamTerritories.get(teamKey);
         teamData.territories.push({
-          tile_id: row.tile_id,
+          id: row.id,
+          run_id: row.run_id,
           owner_id: row.owner_id,
-          strength: row.strength,
+          distance_km: row.distance_km,
           geojson: row.geojson,
-          last_claimed: row.last_claimed
+          created_at: row.created_at,
+          activity_type: row.activity_type
         });
-        teamData.total_strength += row.strength;
-        teamData.tile_count += 1;
+        teamData.total_distance += parseFloat(row.distance_km || 0);
+        teamData.territory_count += 1;
       } else {
         individualTerritories.push({
-          tile_id: row.tile_id,
+          id: row.id,
+          run_id: row.run_id,
           owner_id: row.owner_id,
-          strength: row.strength,
+          distance_km: row.distance_km,
           geojson: row.geojson,
-          last_claimed: row.last_claimed,
+          created_at: row.created_at,
+          activity_type: row.activity_type
           team_id: null
         });
       }
