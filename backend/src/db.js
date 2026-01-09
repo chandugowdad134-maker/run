@@ -67,6 +67,32 @@ export async function ensureSchema() {
     );
   `);
 
+  // Migrate from old tile-based schema to run-based schema
+  await pool.query(`
+    DO $$ 
+    BEGIN
+      -- Check if tile_id column exists (old schema)
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'territories' AND column_name = 'tile_id'
+      ) THEN
+        -- Drop old tile-based columns and indexes
+        DROP INDEX IF EXISTS idx_territories_tile_id;
+        ALTER TABLE territories DROP COLUMN IF EXISTS tile_id;
+        ALTER TABLE territories DROP COLUMN IF EXISTS strength;
+        ALTER TABLE territories DROP COLUMN IF EXISTS last_claimed;
+        
+        -- Add run_id if it doesn't exist
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'territories' AND column_name = 'run_id'
+        ) THEN
+          ALTER TABLE territories ADD COLUMN run_id INTEGER UNIQUE REFERENCES runs(id);
+        END IF;
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS territory_history (
       id SERIAL PRIMARY KEY,
@@ -353,7 +379,7 @@ export async function ensureSchema() {
 
   // Indexes for performance
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_territories_tile_id ON territories(tile_id);
+    CREATE INDEX IF NOT EXISTS idx_territories_run_id ON territories(run_id);
     CREATE INDEX IF NOT EXISTS idx_territories_owner ON territories(owner_id);
     CREATE INDEX IF NOT EXISTS idx_territories_team ON territories(team_id) WHERE team_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id);
