@@ -17,10 +17,10 @@ interface RunDetails {
   createdAt: string;
   geojson: any;
   territories: Array<{
-    tileId: string;
-    fromOwner: number | null;
-    toOwner: number;
-    changedAt: string;
+    run_id: number;
+    owner_id: number;
+    distance_km: number;
+    created_at: string;
     geometry: any;
   }>;
 }
@@ -202,7 +202,7 @@ const RunDetails = () => {
                 <div className="space-y-2">
                   {conqueredTerritories.map((territory, index) => (
                     <motion.div
-                      key={territory.tileId}
+                      key={territory.run_id}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: index * 0.05 }}
@@ -212,11 +212,11 @@ const RunDetails = () => {
                         <div className="flex items-center gap-2">
                           <MapPin className="w-4 h-4 text-green-400" />
                           <span className="text-white font-medium">
-                            Territory {territory.tileId}
+                            Territory {territory.run_id}
                           </span>
                         </div>
                         <div className="text-green-400 text-sm">
-                          {territory.fromOwner ? 'Conquered' : 'Claimed'}
+                          Run: {territory.distance_km?.toFixed(2)}km
                         </div>
                       </div>
                       <div className="text-white/60 text-xs mt-1">

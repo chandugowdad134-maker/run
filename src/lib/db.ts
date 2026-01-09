@@ -11,18 +11,6 @@ export interface Run {
   synced: boolean;
 }
 
-export interface Territory {
-  tileId: string; // Unique key: run-{runId}
-  runId?: number;
-  ownerId: string;
-  ownerName?: string;
-  distance_km?: number;
-  activity_type?: string;
-  geometry: any; // GeoJSON polygon
-  created_at?: string;
-  lastUpdated: number;
-}
-
 export interface UserProfile {
   id: string; // userId
   username: string;
@@ -41,7 +29,6 @@ export interface SyncItem {
 // Database class
 export class TerritoryRunDB extends Dexie {
   runs!: Table<Run>;
-  territories!: Table<Territory>;
   userProfile!: Table<UserProfile>;
   syncQueue!: Table<SyncItem>;
 
@@ -49,7 +36,6 @@ export class TerritoryRunDB extends Dexie {
     super('TerritoryRunDB');
     this.version(1).stores({
       runs: '++id, synced, timestamp',
-      territories: 'tileId, ownerId, lastUpdated',
       userProfile: 'id, lastSynced',
       syncQueue: '++id, type, timestamp'
     });

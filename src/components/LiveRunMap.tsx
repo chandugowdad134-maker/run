@@ -13,12 +13,12 @@ interface GPSPoint {
 }
 
 interface Territory {
-  tile_id: string;
+  run_id: number;
   owner_id: number;
   owner_name: string;
   geometry: any;
-  last_claimed: string;
-  claim_count: number;
+  created_at: string;
+  distance_km?: number;
 }
 
 interface LiveRunMapProps {
@@ -172,7 +172,7 @@ const LiveRunMap = ({
           {/* Nearby Territories */}
           {showTerritories && nearbyTerritories.map((territory) => (
             <GeoJSON
-              key={territory.tile_id}
+              key={territory.run_id}
               data={territory.geometry}
               style={{
                 fillColor: territory.owner_id ? '#3b82f6' : '#6b7280',

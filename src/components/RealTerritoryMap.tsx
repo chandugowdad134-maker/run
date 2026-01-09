@@ -299,27 +299,7 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
     let mounted = true;
     (async () => {
       try {
-        // Load cached territories first
-        const cachedTerritories = await db.territories.toArray();
-        const now = Date.now();
-        const CACHE_TTL = 60 * 60 * 1000; // 1 hour
-        const validCache = cachedTerritories.filter(t => (now - t.lastUpdated) < CACHE_TTL);
-        
-        if (validCache.length > 0) {
-          const territoriesFromCache = validCache.map(t => ({
-            tile_id: t.tileId,
-            run_id: t.runId,
-            owner_id: parseInt(t.ownerId),
-            owner_name: t.ownerName,
-            distance_km: t.distance_km,
-            activity_type: t.activity_type,
-            created_at: t.created_at,
-            geojson: t.geometry || polygonFromTile(t.tileId)
-          }));
-          setTerritories(territoriesFromCache);
-        }
-
-        // Then fetch fresh data in background
+        // Fetch fresh data - no longer using IndexedDB for API territories
         console.log('Fetching territories, runs, friends, and teams...');
         const [terrData, teamTerrData, runData, friendsData, teamsData] = await Promise.all([
           apiFetch('/territories?limit=500'),
@@ -344,25 +324,6 @@ const RealTerritoryMap = ({ center, zoom = 13, showRuns = false, filter = 'prese
         setTeamTerritories(teamTerrData.teams || []);
         setIndividualTerritories(teamTerrData.individual || []);
         setRuns(runData.runs || []);
-        
-        // Cache territories with new schema (run_id instead of tile_id)
-        await db.territories.clear();
-        for (const terr of terrData.territories || []) {
-          // Only cache if it has a valid run_id (key field)
-          if (terr.run_id) {
-            await db.territories.put({
-              tileId: `run-${terr.run_id}`, // Unique identifier based on run_id
-              runId: terr.run_id,
-              ownerId: terr.owner_id?.toString() || '',
-              ownerName: terr.owner_name || 'Unknown',
-              distance_km: terr.distance_km,
-              activity_type: terr.activity_type,
-              geometry: terr.geojson,
-              created_at: terr.created_at,
-              lastUpdated: Date.now()
-            });
-          }
-        }
         
         // Get user's team ID
         if (teamsData.teams?.length > 0) {
