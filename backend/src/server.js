@@ -98,13 +98,27 @@ app.get('/health', (req, res) => {
 
 app.get('/db-check', async (req, res) => {
   try {
+    console.log('[DB Check] Testing database connection...');
     const ok = await verifyDatabaseConnection();
     const timeResult = await pool.query('SELECT NOW() as server_time');
+    
+    // Try to query territories and runs tables
+    const territoryCount = await pool.query('SELECT COUNT(*) as count FROM territories');
+    const runsCount = await pool.query('SELECT COUNT(*) as count FROM runs');
+    const usersCount = await pool.query('SELECT COUNT(*) as count FROM users');
 
-    res.json({ ok, serverTime: timeResult.rows?.[0]?.server_time });
+    res.json({ 
+      ok, 
+      serverTime: timeResult.rows?.[0]?.server_time,
+      tables: {
+        territories: parseInt(territoryCount.rows[0].count),
+        runs: parseInt(runsCount.rows[0].count),
+        users: parseInt(usersCount.rows[0].count),
+      }
+    });
   } catch (error) {
-    console.error('Database check failed:', error);
-    res.status(500).json({ ok: false, error: 'Database connection failed' });
+    console.error('[DB Check] Database check failed:', error.message);
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
