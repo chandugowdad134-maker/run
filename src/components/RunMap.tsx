@@ -6,10 +6,10 @@ import 'leaflet/dist/leaflet.css';
 interface RunMapProps {
   geojson: any; // GeoJSON LineString for the run path
   territories: Array<{
-    tileId: string;
-    fromOwner: number | null;
-    toOwner: number;
-    changedAt: string;
+    run_id: number;
+    owner_id: number;
+    distance_km: number;
+    created_at: string;
     geometry?: any;
   }>;
   className?: string;
@@ -97,7 +97,7 @@ const RunMap = ({ geojson, territories, className = "h-64 rounded-lg" }: RunMapP
 
           return (
             <Polygon
-              key={territory.tileId}
+              key={territory.run_id}
               positions={territory.geometry.coordinates[0].map((coord: [number, number]) => [
                 coord[1], coord[0] // Convert [lng, lat] to [lat, lng]
               ])}

@@ -51,7 +51,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     // Try to load cached user profile first
     try {
-      const cachedProfile = await db.userProfile.get(token); // Use token as key? Wait, userId as key.
+      const cachedProfile = await db.userProfile.get(Number(token)); // Use userId if token stringifies id
       // Actually, since userId is in token, but to simplify, store with userId.
       // For now, assume we store with a fixed key, but better to use userId.
       // Since we don't have userId yet, load all and take first.
@@ -69,7 +69,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(me);
       // Cache the profile
       await db.userProfile.put({
-        id: me.id.toString(),
+        id: me.id,
         username: me.username,
         email: me.email,
         stats: me.stats,
@@ -106,7 +106,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(me);
       // Cache profile
       await db.userProfile.put({
-        id: me.id.toString(),
+        id: me.id,
         username: me.username,
         email: me.email,
         stats: me.stats,
@@ -135,7 +135,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(me);
       // Cache profile
       await db.userProfile.put({
-        id: me.id.toString(),
+        id: me.id,
         username: me.username,
         email: me.email,
         stats: me.stats,

@@ -594,7 +594,7 @@ const Social = () => {
                           <div className="text-white/60 text-sm">{user.total_runs} runs</div>
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <div className="text-white font-bold text-lg">{parseFloat(user.total_distance_km).toFixed(1)} km</div>
+                          <div className="text-white font-bold text-lg">{Number(user.total_distance_km).toFixed(1)} km</div>
                           <div className="text-white/60 text-xs">{user.territories_owned} zones</div>
                         </div>
                       </motion.div>
@@ -688,7 +688,7 @@ const Social = () => {
                           <div className="text-white/60 text-sm">{user.total_runs} runs</div>
                         </div>
                         <div className="text-right flex-shrink-0">
-                          <div className="text-white font-bold text-lg">{parseFloat(user.total_distance_km).toFixed(1)} km</div>
+                          <div className="text-white font-bold text-lg">{Number(user.total_distance_km).toFixed(1)} km</div>
                           <div className="text-white/60 text-xs">{user.territories_owned} zones</div>
                         </div>
                       </motion.div>

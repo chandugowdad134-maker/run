@@ -12,7 +12,7 @@ export interface Run {
 }
 
 export interface UserProfile {
-  id: string; // userId
+  id: number; // userId stored as number for consistency with API
   username: string;
   email: string;
   stats: any; // cached stats

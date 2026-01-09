@@ -6,7 +6,7 @@ type Territory = {
   tile_id: string;
   owner_id: number;
   strength: number;
-  geojson: { type: string; coordinates: number[][][] };
+  geojson: { type: 'Feature'; geometry: { type: string; coordinates: number[][][] } };
 };
 
 const TerritoryMap = () => {

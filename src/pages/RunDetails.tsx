@@ -119,7 +119,7 @@ const RunDetails = () => {
     );
   }
 
-  const conqueredTerritories = runData.territories.filter(t => t.fromOwner !== runData.territories[0]?.toOwner);
+  const conqueredTerritories = runData.territories;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 pb-24">
@@ -220,7 +220,7 @@ const RunDetails = () => {
                         </div>
                       </div>
                       <div className="text-white/60 text-xs mt-1">
-                        {new Date(territory.changedAt).toLocaleTimeString()}
+                        {new Date(territory.created_at).toLocaleTimeString()}
                       </div>
                     </motion.div>
                   ))}

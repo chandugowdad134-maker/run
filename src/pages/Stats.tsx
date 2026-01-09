@@ -189,7 +189,7 @@ const Stats = () => {
                     <div className="space-y-3">
                       <div className="flex items-baseline gap-2">
                         <span className="text-4xl font-bold text-foreground">
-                          {parseFloat(statsData.bestRun.distanceKm).toFixed(2)}
+                          {Number(statsData.bestRun.distanceKm).toFixed(2)}
                         </span>
                         <span className="text-muted-foreground text-lg">km</span>
                       </div>
@@ -231,7 +231,7 @@ const Stats = () => {
                     <div className="bg-muted/60 rounded-lg p-4 border border-border">
                       <div className="text-primary text-sm mb-1">Distance</div>
                       <div className="text-2xl font-bold text-foreground">
-                        {statsData?.totals.totalDistanceKm.toFixed(1)} km
+                        {Number(statsData?.totals.totalDistanceKm).toFixed(1)} km
                       </div>
                     </div>
                     <div className="bg-muted/60 rounded-lg p-4 border border-border">
